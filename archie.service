@@ -1,0 +1,18 @@
+[Unit]
+Description=Archie - mascota flotant d'optimitzacio del sistema
+Documentation=https://github.com/makidev/Petty-Optimizer
+PartOf=graphical-session.target
+After=graphical-session.target
+# No reinicies en bucle si peta a l'arrencada.
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# @INSTALL_DIR@ el substitueix install.sh per la ruta real.
+ExecStart=/usr/bin/python3 @INSTALL_DIR@/archie.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target
