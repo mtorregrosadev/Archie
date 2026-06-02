@@ -7,6 +7,7 @@ Modes (primer argument):
     demo             mostra una bombolla d'exemple que NO desapareix sola
     check            comprova ARA i mostra el resultat (o "tot OK") en una bombolla
     status           taula a la consola amb l'estat de tots els checks
+    fix              Aplica silenciosament TOTES les optimitzacions bàsiques de cop
     help             aquesta ajuda
 
 NOTA: shebang /usr/bin/python3 a propòsit. PyGObject (gi) viu a
@@ -19,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -119,8 +121,11 @@ class State:
     def last_shown(self) -> float:
         return float(self.data.get("last_shown", 0.0))
 
-    def mark_shown(self) -> None:
+    def mark_shown(self, sid: str = None) -> None:
         self.data["last_shown"] = time.time()
+        if sid:
+            self.data["last_shown_id"] = sid
+            self.data["last_shown_time"] = time.time()
         self._save()
 
     def is_applied(self, sid: str) -> bool:
@@ -159,9 +164,53 @@ CATEGORY_LABELS = {
 }
 
 
+def run_fix_all_cli() -> int:
+    color = sys.stdout.isatty()
+    def c(code: str, text: str) -> str:
+        return f"\033[{code}m{text}\033[0m" if color else text
+
+    print(c("1;38;5;183", "\n 🐱 Archie — Taller de reparació ràpida"))
+    print(c("90", " Avaluant l'estat del sistema i aplicant solucions...\n"))
+
+    # Demanem sudo per endavant perquè els fixes silenciosos que el necessitin
+    # no s'encallin (o fallin directament) demanant contrasenyes invisibles.
+    subprocess.run(["sudo", "-v"], check=False)
+
+    try:
+        results = monitor.evaluate_all(force=True)
+    except FileNotFoundError:
+        print("archie: no trobo archie_checks.yaml", file=sys.stderr)
+        return 1
+
+    state = State()
+    fixed_count = 0
+    failed_count = 0
+
+    for chk, st in results:
+        if st == monitor.ALERT and chk.fix:
+            if state.is_blocked(chk.id):
+                continue
+
+            print(f" ⚙️  Arreglant: {c('1', chk.id)}", end="", flush=True)
+            ok = monitor.run_fix(chk.fix, silent=True)
+            
+            if ok:
+                print(f"\r {c('32', '✓')} {c('1', chk.id)} " + c("90", "(aplicat amb èxit)"))
+                fixed_count += 1
+                if chk.once:
+                    state.mark_applied(chk.id)
+            else:
+                print(f"\r {c('31', '✗')} {c('1', chk.id)} " + c("31", "(ha fallat l'script)"))
+                failed_count += 1
+
+    print(f"\n {c('1;32', str(fixed_count) + ' problemes solucionats.')}")
+    if failed_count:
+        print(f" {c('31', str(failed_count) + ' han fallat (potser requereixen terminal complet o més temps).')}")
+    print()
+    return 0
+
 def run_status_cli() -> int:
     color = sys.stdout.isatty()
-
     def c(code: str, text: str) -> str:
         return f"\033[{code}m{text}\033[0m" if color else text
 
@@ -280,6 +329,7 @@ def run_gui(mode: str) -> int:
             self._autohide_id = 0
             self._autohide_secs = 0
             self._scheduled = False
+            self._shown_times = {}
 
         # -- cicle de vida ------------------------------------------------- #
         def do_activate(self) -> None:
@@ -327,7 +377,7 @@ def run_gui(mode: str) -> int:
                 LayerShell.set_margin(self.win, LayerShell.Edge.BOTTOM, 24)
                 LayerShell.set_margin(self.win, LayerShell.Edge.RIGHT, 24)
                 LayerShell.set_keyboard_mode(self.win,
-                                             LayerShell.KeyboardMode.ON_DEMAND)
+                                             LayerShell.KeyboardMode.NONE)
                 try:
                     LayerShell.set_namespace(self.win, "archie")
                 except Exception:
@@ -402,8 +452,20 @@ def run_gui(mode: str) -> int:
             ).start()
 
         def _sweep_worker(self, is_blocked, force, only_critical, done_cb) -> None:
+            # Afegim la capacitat d'ignorar el check que acaben de mostrar
+            # i que l'usuari ha ignorat, perquè pugui passar al següent en la llista
+            # sense bloquejar tota la cua d'alertes indefinidament.
+            def is_blocked_extended(sid: str) -> bool:
+                if is_blocked(sid):
+                    return True
+                # Si l'acabem de mostrar recentment (1 hora), passa al següent.
+                # Excepcions: alertes crítiques (aquestes mai s'ignoren)
+                if not only_critical and (time.time() - self._shown_times.get(sid, 0) < 3600):
+                    return True
+                return False
+
             try:
-                check = monitor.first_alert(is_blocked, force=force, only_critical=only_critical)
+                check = monitor.first_alert(is_blocked_extended, force=force, only_critical=only_critical)
             except Exception as e:
                 print(f"archie: error comprovant: {e}", file=sys.stderr)
                 check = None
@@ -430,6 +492,9 @@ def run_gui(mode: str) -> int:
             self.current = check
             self.showing = True
             self.msg_label.set_text(check.message)
+            if check.id not in ("all_ok", "demo"):
+                self._shown_times[check.id] = time.time()
+            
             if check.fix:
                 self.fix_btn.set_label(check.label or "Arregla-ho")
                 self.fix_btn.set_visible(True)
@@ -439,7 +504,7 @@ def run_gui(mode: str) -> int:
                 self.later_btn.set_label("Entesos")
 
             if record and self.mode == "daemon":
-                self.state.mark_shown()
+                self.state.mark_shown(check.id)
 
             self._autohide_secs = (
                 0 if self.mode == "demo"
@@ -451,6 +516,23 @@ def run_gui(mode: str) -> int:
             self.win.present()
             self._animate(self.bubble, 0.0, 1.0, FADE_IN_MS)
             self._arm_autohide()
+
+        def _run_chained_check(self) -> None:
+            if self.showing or self._sweeping:
+                return
+            
+            # Temps de respir i validació. Esperem 3 segons abans de llançar la següent.
+            def delayed_sweep() -> bool:
+                if not self.showing and not self._sweeping:
+                    self._sweeping = True
+                    threading.Thread(
+                        target=self._sweep_worker,
+                        args=(self.state.is_blocked, False, False, self._sweep_done),
+                        daemon=True,
+                    ).start()
+                return GLib.SOURCE_REMOVE
+
+            GLib.timeout_add_seconds(3, delayed_sweep)
 
         def _show_demo(self) -> None:
             demo = monitor.Check(
@@ -469,6 +551,9 @@ def run_gui(mode: str) -> int:
                 self.current = None
                 if self.mode in ("demo", "check"):
                     self.quit()
+                elif self.mode == "daemon":
+                    # Immediatament busca el següent problema per fer cua
+                    self._run_chained_check()
 
             start = self.bubble.get_opacity() if self.bubble else 1.0
             self._animate(self.bubble, start, 0.0, FADE_OUT_MS, on_done=done)
@@ -498,6 +583,7 @@ def run_gui(mode: str) -> int:
                 ok = monitor.run_fix(c.fix)
                 if ok and c.once:
                     self.state.mark_applied(c.id)
+                c._status = "unknown"  # Força reavaluació si torna a sortir
             self._hide()
 
         def on_later(self, _btn) -> None:
@@ -565,16 +651,20 @@ def main() -> int:
             mode = "demo"
         elif a in ("check", "test", "once"):
             mode = "check"
+        elif a == "fix":
+            mode = "fix"
         elif a in ("help", "h"):
             print(__doc__)
             return 0
         else:
-            print(f"archie: mode desconegut '{args[0]}'. Prova: status, demo, check, help",
+            print(f"archie: mode desconegut '{args[0]}'. Prova: status, fix, demo, check, help",
                   file=sys.stderr)
             return 2
 
     if mode == "status":
         return run_status_cli()
+    if mode == "fix":
+        return run_fix_all_cli()
 
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     return run_gui(mode)

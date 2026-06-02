@@ -313,11 +313,23 @@ def _find_terminal() -> Optional[List[str]]:
     return None
 
 
-def run_fix(fix_command: str) -> bool:
+def run_fix(fix_command: str, silent: bool = False) -> bool:
     """Executa el fix dins un terminal que es queda obert amb el resultat.
 
-    Així l'usuari pot escriure la contrasenya (sudo) i veure si ha anat bé.
+    Si silent=True, l'executa directament pel darrere sense obrir finestres
+    i retorna l'èxit o fracàs silenciosament (ideal per a 'archie fix').
     """
+    if silent:
+        try:
+            rc = subprocess.run(
+                ["bash", "-c", fix_command],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            ).returncode
+            return rc == 0
+        except Exception:
+            return False
+
     term = _find_terminal()
     wrapper = (
         f"{fix_command}\n"
@@ -333,7 +345,7 @@ def run_fix(fix_command: str) -> bool:
             subprocess.Popen(term + ["bash", "-lc", wrapper],
                              start_new_session=True)
         else:
-            # Sense terminal: l'executem desacoblat (sudo no funcionarà).
+            # Sense terminal: l'executem desacoblat
             subprocess.Popen(["bash", "-lc", fix_command],
                              start_new_session=True,
                              stdout=subprocess.DEVNULL,

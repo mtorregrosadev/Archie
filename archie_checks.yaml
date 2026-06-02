@@ -9,7 +9,8 @@
 #
 # Camps OPCIONALS:
 #   label     text del botó d'acció (per defecte "Arregla-ho"; p. ex. "Mostra-ho")
-#   once      si true, un cop aplicat no es torna a suggerir (estat persistent)
+#   once      si true, un un cop aplicat no es torna a suggerir (estat persistent)
+#   critical  si true, salta't l'espera de 15 minuts i avisa a l'instant
 #
 # Nota: si una eina de 'detect' no està instal·lada, el check s'OMET (no falla).
 
@@ -22,19 +23,19 @@ checks:
   - id: cpu_temp_high
     category: thermals
     critical: true
-    message: "Alerta! La CPU està a més de 85°C. Recomano tancar alguna cosa."
-    detect: "sensors | grep 'Package id 0' | awk '{print $4}' | tr -d '+°C' | awk -F. '{if ($1 > 85) exit 0; else exit 1}'"
+    message: "Alerta! CPU a >85°C. El procés '{}' l'està ofegant. Tanca'l abans que es sobreescalfi."
+    detect: "temp=$(sensors | grep 'Package id 0' | awk '{print $4}' | tr -d '+°C' | awk -F. '{print $1}'); if [ -n \"$temp\" ] && [ \"$temp\" -gt 85 ]; then proc=$(ps aux --sort=-%cpu | awk 'NR==2 {print $11}'); basename \"$proc\"; exit 0; else exit 1; fi"
     fix: null
 
   - id: mbpfan_inactive
     category: thermals
-    message: "El control de fans del MacBook no està actiu, l'activo?"
+    message: "Control de ventiladors apagat. Vols activar 'mbpfan' per millorar la refrigeració?"
     detect: "systemctl is-active mbpfan | grep -q inactive"
     fix: "sudo systemctl start mbpfan"
 
   - id: thermal_paste_warning
     category: thermals
-    message: "La CPU supera 75°C en repòs. La pasta tèrmica podria estar ressecada."
+    message: "CPU a >75°C en repòs. Podria faltar pasta tèrmica o netejar ventiladors."
     detect: "sensors | grep 'Package id 0' | awk '{print $4}' | tr -d '+°C' | awk -F. '{if ($1 > 75) exit 0; else exit 1}'"
     fix: null
 
@@ -44,20 +45,20 @@ checks:
 
   - id: cpu_governor_wrong
     category: cpu
-    message: "El governor de CPU no és òptim per portàtil, el canvio a balanced?"
+    message: "CPU en mode extrem. Puc posar-la a 'balanced' per estalviar bateria sense perdre fluïdesa?"
     detect: "cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor | grep -qv 'balanced\\|power-saver\\|schedutil'"
     fix: "powerprofilesctl set balanced"
 
   - id: power_profiles_inactive
     category: cpu
-    message: "power-profiles-daemon no està actiu, l'activo?"
+    message: "Gestor de perfils d'energia apagat. L'activo perquè et duri més la bateria?"
     detect: "systemctl is-active power-profiles-daemon | grep -q inactive"
     fix: "sudo systemctl start power-profiles-daemon"
 
   - id: battery_low_performance
     category: cpu
-    message: "Bateria per sota del 20% i en mode rendiment. Canvio a power-saver?"
-    detect: "cat /sys/class/power_supply/BAT0/capacity | awk '{if ($1 < 20) exit 0; else exit 1}' && powerprofilesctl get | grep -q performance"
+    message: "Bateria <40% en mode rendiment. Activo l'estalvi d'energia per no quedar-te tirat?"
+    detect: "cat /sys/class/power_supply/BAT0/capacity | awk '{if ($1 < 40) exit 0; else exit 1}' && powerprofilesctl get | grep -q performance"
     fix: "powerprofilesctl set power-saver"
 
   # ═══════════════════════════════════════
@@ -67,27 +68,56 @@ checks:
   - id: oom_imminent
     category: memory
     critical: true
-    message: "Alerta! Queden menys de 500MB de RAM lliure. Podries patir un bloqueig (OOM). Tanca coses!"
+    message: "Alerta! <500MB de RAM lliure. El PC es penjarà aviat. Tanca aplicacions ARA!"
     detect: "free -m | awk '/^Mem/ {if ($7 < 500) exit 0; else exit 1}'"
     fix: null
 
   - id: ram_usage_high
     category: memory
-    message: "La RAM està al 85%+. Mira quina app tanca."
+    message: "RAM gairebé plena (>85%). Tanca alguna cosa abans no et vagi tot a batzegades."
     detect: "free | awk '/^Mem/ {if ($3/$2 > 0.85) exit 0; else exit 1}'"
     fix: null
 
+  - id: high_ram_process
+    category: memory
+    message: "'{}' es menja >30% de la RAM. El tanco a la força?"
+    detect: "proc=$(ps aux --sort=-%mem | awk 'NR==2 {if ($4 > 30) print $11}'); if [ -n \"$proc\" ]; then basename \"$proc\"; exit 0; else exit 1; fi"
+    fix: "killall -9 $(ps aux --sort=-%mem | awk 'NR==2 {print $11}' | xargs basename)"
+    label: "Tanca'l"
+
   - id: swappiness_high
     category: memory
-    message: "Swappiness massa alt per SSD (>10). El redueixo a 10?"
-    detect: "cat /proc/sys/vm/swappiness | awk '{if ($1 > 10) exit 0; else exit 1}'"
-    fix: "sudo sysctl vm.swappiness=10 && echo 'vm.swappiness=10' | sudo tee /etc/sysctl.d/99-sysctl.conf"
+    message: "Ús de swap excessiu. Et desgastarà el SSD ràpid. Ho redueixo al valor òptim (10)?"
+    detect: "cat /proc/sys/vm/swappiness | awk '{if ($1 > 10 && $1 < 100) exit 0; else exit 1}' && ! swapon --show | grep -q zram"
+    fix: "sudo sysctl vm.swappiness=10 && echo 'vm.swappiness=10' | sudo tee /etc/sysctl.d/99-swappiness.conf"
+
+  - id: swappiness_zram_low
+    category: memory
+    message: "Tens ZRAM actiu però l'intercanvi de memòria és baix. Apujar-lo a 180 donarà un rendiment espectacular. T'ho faig?"
+    detect: "cat /proc/sys/vm/swappiness | awk '{if ($1 < 100) exit 0; else exit 1}' && swapon --show | grep -q zram"
+    fix: "sudo sysctl vm.swappiness=180 && echo 'vm.swappiness=180' | sudo tee /etc/sysctl.d/99-swappiness.conf"
+    once: true
 
   - id: zram_not_active
     category: memory
-    message: "zram no actiu. Comprimeix la RAM i millora rendiment. L'activo?"
-    detect: "! lsmod | grep -q zram"
-    fix: "sudo modprobe zram && echo 'zram' | sudo tee /etc/modules-load.d/zram.conf"
+    message: "Compressió de memòria (ZRAM amb zstd) apagada. Aquesta és l'optimització #1 per al teu PC. L'activo definitivament?"
+    detect: "! swapon --show | grep -q zram"
+    fix: "sudo pacman -S --noconfirm zram-generator && sudo bash -c 'echo -e \"[zram0]\\nzram-size = ram / 2\\ncompression-algorithm = zstd\\nswap-priority = 100\\nfs-type = swap\" > /etc/systemd/zram-generator.conf' && sudo systemctl daemon-reload && sudo systemctl restart systemd-zram-setup@zram0.service"
+    once: true
+
+  - id: earlyoom_inactive
+    category: memory
+    message: "El teu kernel col·lapsarà si et quedes sense RAM. Activar 'earlyoom' evitarà que es pengi completament. Ho activo?"
+    detect: "! systemctl is-active earlyoom | grep -q active"
+    fix: "sudo pacman -S --noconfirm earlyoom && sudo systemctl enable --now earlyoom"
+    once: true
+
+  - id: vfs_cache_pressure_high
+    category: memory
+    message: "El sistema està alliberant memòria cau d'arxius molt ràpid. Reduir-ho a 50 farà que l'ordinador respongui més àgilment. Canvio el valor?"
+    detect: "cat /proc/sys/vm/vfs_cache_pressure | awk '{if ($1 > 75) exit 0; else exit 1}'"
+    fix: "sudo sysctl vm.vfs_cache_pressure=50 && echo 'vm.vfs_cache_pressure=50' | sudo tee /etc/sysctl.d/99-vfs_cache_pressure.conf"
+    once: true
 
   # ═══════════════════════════════════════
   # 💾 SSD & DISC
@@ -96,33 +126,42 @@ checks:
   - id: root_partition_full
     category: ssd
     critical: true
-    message: "Alerta! La partició arrel (/) està al +90%. L'espai lliure és crític. Netejo?"
+    message: "Alerta! Disc arrel (/) al >90%. Quedar-se sense espai trenca el sistema. Netejo?"
     detect: "df / | awk 'NR==2 {print $5}' | tr -d '%' | awk '{if ($1 > 90) exit 0; else exit 1}'"
     fix: "sudo pacman -Sc --noconfirm && sudo journalctl --vacuum-time=3d"
 
   - id: pacman_cache_large
     category: ssd
-    message: "La memòria cau de pacman ocupa +3GB. Vols netejar-la (manté les 3 últimes versions)?"
+    message: "La cache de pacman ocupa +3GB. Vols esborrar-la per alliberar disc?"
     detect: "du -s /var/cache/pacman/pkg 2>/dev/null | awk '{if ($1 > 3000000) exit 0; else exit 1}'"
-    fix: "sudo paccache -r || sudo pacman -Sc"
+    fix: "if command -v paccache >/dev/null; then sudo paccache -r; else sudo pacman -Sc --noconfirm; fi"
 
   - id: journal_size_large
     category: ssd
-    message: "Els logs de systemd ocupen més d'1GB. Els redueixo a 100M?"
+    message: "Els logs de sistema ocupen +1GB. Els redueixo a 100MB per recuperar espai?"
     detect: "journalctl --disk-usage | awk '{print $6}' | grep -E '^[1-9][0-9]*(\\.[0-9]+)?G'"
     fix: "sudo journalctl --vacuum-size=100M"
 
   - id: trim_not_active
     category: ssd
-    message: "fstrim no programat. Necessari per la salut del SSD. L'activo?"
+    message: "Manteniment de disc (fstrim) apagat. Activar-lo allargarà la vida del teu SSD."
     detect: "! systemctl is-enabled fstrim.timer | grep -q enabled"
     fix: "sudo systemctl enable --now fstrim.timer"
+    once: true
+
+  - id: noatime_not_set
+    category: ssd
+    message: "El teu SSD està escrivint la data d'accés cada cop que obres un arxiu. Desactivar-ho allargarà moltíssim la seva vida. Ho faig?"
+    detect: "findmnt -no OPTIONS / | grep -q 'noatime' && exit 1 || exit 0"
+    fix: "sudo sed -i 's/defaults/defaults,noatime/' /etc/fstab && sudo mount -o remount /"
+    once: true
 
   - id: io_scheduler_not_optimal
     category: ssd
-    message: "L'scheduler d'I/O no és òptim per SSD. El canvio a mq-deadline?"
-    detect: "cat /sys/block/sda/queue/scheduler | grep -qv 'mq-deadline\\|none\\|kyber'"
-    fix: "echo mq-deadline | sudo tee /sys/block/sda/queue/scheduler"
+    message: "Scheduler de disc no òptim. Posar 'mq-deadline' farà que el teu SSD SATA vagi molt més ràpid. El configuro de per vida?"
+    detect: "cat /sys/block/sda/queue/scheduler 2>/dev/null | grep -qv 'mq-deadline\\|none\\|kyber'"
+    fix: "sudo bash -c 'echo \"ACTION==\\\"add|change\\\", KERNEL==\\\"sd[a-z]*\\\", ATTR{queue/rotational}==\\\"0\\\", ATTR{queue/scheduler}=\\\"mq-deadline\\\"\" > /etc/udev/rules.d/60-ioschedulers.rules' && sudo udevadm control --reload && sudo udevadm trigger"
+    once: true
 
   # ═══════════════════════════════════════
   # 🌐 APPS: WAYLAND vs X11
@@ -130,21 +169,21 @@ checks:
 
   - id: spotify_x11
     category: wayland
-    message: "Spotify corre en X11 en comptes de Wayland. El configuro?"
+    message: "Spotify corre sobre X11 (lent). El forço a usar Wayland per anar fluid?"
     detect: "ps aux | grep spotify | grep -v grep | grep -q 'ozone-platform=x11'"
     fix: "mkdir -p ~/.local/share/applications && { [ -f ~/.local/share/applications/spotify.desktop ] || cp /usr/share/applications/spotify.desktop ~/.local/share/applications/ 2>/dev/null; } && sed -i 's|Exec=spotify|Exec=spotify --ozone-platform=wayland|' ~/.local/share/applications/spotify.desktop"
     once: true
 
   - id: brave_x11
     category: wayland
-    message: "Brave corre en X11. Millor rendiment en Wayland natiu. El configuro?"
+    message: "Brave corre sobre X11. Si l'obrim amb Wayland gastarà menys bateria. T'ho faig?"
     detect: "ps aux | grep brave | grep -v grep | grep -q 'ozone-platform=x11'"
     fix: "mkdir -p ~/.local/share/applications && { [ -f ~/.local/share/applications/brave-browser.desktop ] || cp /usr/share/applications/brave-browser.desktop ~/.local/share/applications/ 2>/dev/null; } && sed -i 's|Exec=/opt/brave-bin/brave|Exec=/opt/brave-bin/brave --ozone-platform=wayland|' ~/.local/share/applications/brave-browser.desktop"
     once: true
 
   - id: electron_x11
     category: wayland
-    message: "Tens apps Electron en X11 (Claude, VSCode...). Vols configurar-les?"
+    message: "Tens apps Electron (Claude, VSCode) usant X11. Hauries de configurar-les a Wayland."
     detect: "ps aux | grep electron | grep -v grep | grep -q 'x11'"
     fix: null
 
@@ -154,14 +193,14 @@ checks:
 
   - id: boot_slow
     category: boot
-    message: "El sistema triga més de 10s a arrencar. Vols veure què el ralentitza?"
+    message: "L'ordinador triga +10s a arrencar. Vols veure els programes culpables?"
     detect: "systemd-analyze | awk '/Startup finished/ {match($0, /= ([0-9.]+)s/, a); if (a[1] > 10) exit 0; else exit 1}'"
     fix: "systemd-analyze blame | head -20"
     label: "Mostra-ho"
 
   - id: unnecessary_services
     category: boot
-    message: "Hi ha serveis actius que no uses. Vols veure la llista?"
+    message: "Tens masses serveis invisibles (+30) gastant fons inútilment. T'ensenyo quins són?"
     detect: "systemctl list-units --type=service --state=running | wc -l | awk '{if ($1 > 30) exit 0; else exit 1}'"
     fix: null
 
@@ -171,13 +210,13 @@ checks:
 
   - id: battery_health_low
     category: battery
-    message: "La bateria té menys del 60% de capacitat original. Considera substituir-la."
+    message: "Salut de bateria <60%. Toca pensar en canviar-la per no perdre hores d'ús."
     detect: "f=/sys/class/power_supply/BAT0; r=$f/charge_full; d=$f/charge_full_design; [ -r $r ] || { r=$f/energy_full; d=$f/energy_full_design; }; [ -r $r ] && awk -v a=$(cat $r) -v b=$(cat $d) 'BEGIN{exit !(b>0 && a/b < 0.6)}'"
     fix: null
 
   - id: wifi_power_save_off
     category: battery
-    message: "WiFi power save apagat. L'activo per estalviar bateria?"
+    message: "Estalvi d'energia Wi-Fi apagat. Si l'activo et durarà molt més la bateria. Faig?"
     detect: "iwconfig 2>/dev/null | grep -q 'Power Management:off'"
     fix: "sudo iwconfig wlan0 power on"
 
@@ -187,13 +226,13 @@ checks:
 
   - id: system_not_updated
     category: security
-    message: "Hi ha actualitzacions pendents. Les instal·lo?"
+    message: "Hi ha actualitzacions crítiques pendents de pacman. Les instal·lo ara?"
     detect: "checkupdates 2>/dev/null | grep -q '.'"
     fix: "sudo pacman -Syu --noconfirm"
 
   - id: firewall_inactive
     category: security
-    message: "No tens firewall actiu. Vols activar ufw?"
+    message: "No tens cap tallafocs! Ets vulnerable en xarxes públiques. Configuro l''ufw'?"
     detect: "! systemctl is-active ufw | grep -q active && ! systemctl is-active nftables | grep -q active"
     fix: "sudo pacman -S --noconfirm ufw && sudo ufw enable && sudo systemctl enable --now ufw"
 
@@ -203,13 +242,13 @@ checks:
 
   - id: direct_rendering_off
     category: gpu
-    message: "Direct rendering no actiu. La GPU no s'accelera correctament."
+    message: "L'acceleració GPU (direct rendering) no funciona. El PC anirà súper lent."
     detect: "glxinfo 2>/dev/null | grep 'direct rendering' | grep -q 'No'"
     fix: null
 
   - id: compositor_vsync
     category: gpu
-    message: "VSync actiu pot causar latència. Vols optimitzar Hyprland?"
+    message: "VSync d'Hyprland apagat. Retarda els visuals i gasta bateria a lo tonto. Ho arreglo?"
     detect: "grep -q 'vfr = false' ~/.config/hypr/hyprland.conf 2>/dev/null"
     fix: "sed -i 's/vfr = false/vfr = true/' ~/.config/hypr/hyprland.conf && hyprctl reload"
 
@@ -219,7 +258,7 @@ checks:
 
   - id: dns_slow
     category: network
-    message: "DNS triga més de 100ms. Vols canviar a 1.1.1.1 (Cloudflare)?"
+    message: "Peticions de xarxa lentes. Puc canviar el teu DNS a 1.1.1.1 per anar més ràpid?"
     detect: "dig @$(grep nameserver /etc/resolv.conf | head -1 | awk '{print $2}') google.com | grep 'Query time' | awk '{if ($4 > 100) exit 0; else exit 1}'"
     fix: "echo 'nameserver 1.1.1.1' | sudo tee /etc/resolv.conf"
 
@@ -230,27 +269,27 @@ checks:
   - id: system_load_high
     category: performance
     critical: true
-    message: "La càrrega del sistema és molt alta. Vols veure els processos que més consumeixen?"
+    message: "Càrrega extrema del sistema! Vols que et mostri els programes culpables?"
     detect: "load=$(cat /proc/loadavg | awk '{print $1}'); cores=$(nproc); awk -v l=$load -v c=$cores 'BEGIN {if (l > c*2) exit 0; else exit 1}'"
     fix: "ps aux --sort=-%cpu | head -10"
     label: "Mostra-ho"
 
   - id: zombie_processes
     category: performance
-    message: "Hi ha diversos processos 'zombie' al sistema. Vols veure'ls?"
+    message: "Hi ha processos 'zombi' (penjats però gastant recursos). T'ensenyo quins són?"
     detect: "[ $(ps axo stat | grep -c '^Z') -gt 5 ]"
     fix: "ps aux | awk '$8==\"Z\"'"
     label: "Mostra'ls"
 
   - id: too_many_brave_renderers
     category: performance
-    message: "Tens +5 pestanyes de Brave obertes i el sistema va lent. Tanques algunes?"
+    message: "Massa pestanyes de Brave obertes consumint de tot. Tanca les que no usis!"
     detect: "[ $(ps aux | grep 'brave.*--type=renderer' | grep -v grep | wc -l) -gt 5 ]"
     fix: null
 
   - id: high_cpu_process
     category: performance
-    message: "El procés '{}' està menjant >50% de CPU. Vols tancar-lo?"
+    message: "'{}' s'està menjant >50% de la CPU. El tanco a la força?"
     detect: "proc=$(ps aux --sort=-%cpu | awk 'NR==2 {if ($3 > 50) print $11}'); if [ -n \"$proc\" ]; then basename \"$proc\"; exit 0; else exit 1; fi"
-    fix: "killall $(ps aux --sort=-%cpu | awk 'NR==2 {print $11}' | xargs basename)"
+    fix: "killall -9 $(ps aux --sort=-%cpu | awk 'NR==2 {print $11}' | xargs basename)"
     label: "Tanca'l"
