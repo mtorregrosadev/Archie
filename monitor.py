@@ -127,6 +127,8 @@ class Check:
     detect: str
     fix: Optional[str] = None
     label: str = "Arregla-ho"
+    message_en: str = ""
+    label_en: str = "Fix it"
     once: bool = False
     critical: bool = False
     undo: Optional[str] = None   # com revertir el fix (per a auto-aplicació i ghost)
@@ -201,10 +203,16 @@ class Check:
 
     @property
     def display_message(self) -> str:
-        """El missatge amb {} substituït per la sortida del detect (si n'hi ha)."""
-        if self._out and "{}" in self.message:
-            return self.message.replace("{}", self._out)
-        return self.message
+        lang = os.environ.get("ARCHIE_LANG", "ca")
+        base = self.message_en if lang == "en" and self.message_en else self.message
+        if self._out and "{}" in base:
+            return base.replace("{}", self._out)
+        return base
+
+    @property
+    def display_label(self) -> str:
+        lang = os.environ.get("ARCHIE_LANG", "ca")
+        return self.label_en if lang == "en" and self.label_en else self.label
 
     @property
     def run_command(self) -> Optional[str]:
@@ -289,9 +297,11 @@ def load_checks(path: str = CHECKS_FILE) -> List[Check]:
             id=c["id"],
             category=c.get("category", "misc"),
             message=c.get("message", ""),
+            message_en=c.get("message_en", ""),
             detect=c["detect"],
             fix=c.get("fix") or None,
             label=c.get("label") or "Arregla-ho",
+            label_en=c.get("label_en") or "Fix it",
             once=bool(c.get("once", False)),
             critical=bool(c.get("critical", False)),
             undo=c.get("undo") or None,

@@ -34,6 +34,10 @@ from typing import Callable, List, Optional, Tuple
 
 import monitor
 
+def _T(ca: str, en: str) -> str:
+    return en if os.environ.get('ARCHIE_LANG', 'ca') == 'en' else ca
+
+
 # --------------------------------------------------------------------------- #
 #  Constants d'ajust
 # --------------------------------------------------------------------------- #
@@ -111,12 +115,22 @@ def _bat_dir() -> Optional[str]:
 @dataclass
 class _Ghost:
     id: str
-    want: Callable[[], bool]            # condició per aplicar-la
-    do: Callable[[], Optional[Tuple[str, str]]]  # (undo_cmd, missatge) o None
-    restore_ok: Callable[[], bool]      # condició per desfer-la sola
+    want: Callable[[], bool]
+    do: Callable[[], Optional[Tuple[str, str]]]
+    restore_ok: Callable[[], bool]
     undo_label: str = "Desfés"
+    undo_label_en: str = "Undo"
     auto_restore: bool = True
     restore_msg: str = "✓ Restaurat: tornes a estar com abans."
+    restore_msg_en: str = "✓ Restored: you're back as before."
+
+    @property
+    def display_undo_label(self) -> str:
+        return _T(self.undo_label, self.undo_label_en)
+
+    @property
+    def display_restore_msg(self) -> str:
+        return _T(self.restore_msg, self.restore_msg_en)
 
 
 # --------------------------------------------------------------------------- #
@@ -127,15 +141,15 @@ class Brain:
         self.state = state
         self._ghosts: List[_Ghost] = [
             _Ghost("ghost_power_saver", self._ps_want, self._ps_do, self._charging,
-                   restore_msg="🔌 Endollat: he restaurat el teu perfil d'energia."),
+                   restore_msg="🔌 Endollat: he restaurat el teu perfil d'energia.", restore_msg_en="🔌 Plugged in: restored your power profile."),
             _Ghost("ghost_bluetooth", self._bt_want, self._bt_do, self._charging,
-                   restore_msg="🔌 Endollat: he tornat a encendre el Bluetooth."),
+                   restore_msg="🔌 Endollat: he tornat a encendre el Bluetooth.", restore_msg_en="🔌 Plugged in: Bluetooth turned back on."),
             _Ghost("ghost_backlight", self._bl_want, self._bl_do, self._charging,
-                   restore_msg="🔌 Endollat: lluentor restaurada."),
+                   restore_msg="🔌 Endollat: lluentor restaurada.", restore_msg_en="🔌 Plugged in: brightness restored."),
             _Ghost("ghost_animations", self._an_want, self._an_do, self._charging,
-                   restore_msg="🔌 Endollat: animacions reactivades."),
+                   restore_msg="🔌 Endollat: animacions reactivades.", restore_msg_en="🔌 Plugged in: animations reactivated."),
             _Ghost("ghost_sync_pause", self._sync_want, self._sync_do, self._charging,
-                   restore_msg="🔌 Endollat: sincronitzacions represes."),
+                   restore_msg="🔌 Endollat: sincronitzacions represes.", restore_msg_en="🔌 Plugged in: syncs resumed."),
         ]
 
     # ===================================================================== #
@@ -308,7 +322,7 @@ class Brain:
                 self.state.data["last_ghost_time"] = time.time()
                 self.state._save()
                 return {"id": gid, "kind": "restore",
-                        "message": info.get("restore_msg") or g.restore_msg,
+                        "message": info.get("restore_msg") or g.display_restore_msg,
                         "undo": None}
 
         # 3b. Aplicar-ne una de nova (amb cooldown global per no atabalar).
@@ -328,11 +342,11 @@ class Brain:
             undo, msg = res
             active[g.id] = {"undo": undo, "msg": msg, "applied_at": time.time(),
                             "auto_restore": g.auto_restore,
-                            "restore_msg": g.restore_msg}
+                            "restore_msg": g.display_restore_msg}
             self.state.data["last_ghost_time"] = time.time()
             self.state._save()
             return {"id": g.id, "kind": "apply", "message": msg,
-                    "undo": undo, "undo_label": g.undo_label}
+                    "undo": undo, "undo_label": g.display_undo_label}
         return None
 
     def clear_ghost(self, gid: str) -> None:
@@ -378,7 +392,7 @@ class Brain:
         if rc != 0:
             return None
         return (f"powerprofilesctl set {prof}",
-                "👻 Mode estalvi activat: bateria baixa i equip en repòs.")
+                _T("👻 Mode estalvi activat: bateria baixa i equip en repòs.", "👻 Power saving mode on: low battery and idle."))
 
     # ---- ghost: bluetooth ---------------------------------------------- #
     def _bt_want(self) -> bool:
@@ -399,7 +413,7 @@ class Brain:
         if not _run(["rfkill", "block", "bluetooth"])[0] == 0:
             return None
         return ("rfkill unblock bluetooth",
-                "👻 Bluetooth apagat: no l'estaves usant i drena bateria.")
+                _T("👻 Bluetooth apagat: no l'estaves usant i drena bateria.", "👻 Bluetooth off: not in use, saves battery."))
 
     # ---- ghost: lluentor ----------------------------------------------- #
     def _bl_want(self) -> bool:
@@ -417,7 +431,7 @@ class Brain:
         if rc != 0:
             return None
         return (f"brightnessctl set {cur}",
-                "👻 Pantalla atenuada al 50%: estalvi amb bateria baixa.")
+                _T("👻 Pantalla atenuada al 50%: estalvi amb bateria baixa.", "👻 Screen dimmed to 50%: saving battery."))
 
     # ---- ghost: animacions Hyprland ------------------------------------ #
     def _an_want(self) -> bool:
@@ -432,7 +446,7 @@ class Brain:
         if rc != 0:
             return None
         return ("hyprctl keyword animations:enabled 1",
-                "👻 Animacions desactivades: bateria crítica, a estirar-la.")
+                _T("👻 Animacions desactivades: bateria crítica, a estirar-la.", "👻 Animations disabled: critical battery, stretching it out."))
 
     # ===================================================================== #
     #  ANÀLISI: anomalies que només es veuen amb tendències
@@ -469,11 +483,10 @@ class Brain:
         return {
             "id": f"leak_{name}",
             "category": "memory",
-            "message": (f"'{name}' va acumulant RAM sense parar "
-                        f"({first // 1024} → {last // 1024} MB en pocs minuts). "
-                        "Sembla una fuga de memòria. El reinicio?"),
+            "message": _T(f"'{name}' va acumulant RAM sense parar ({first // 1024} → {last // 1024} MB en pocs minuts). Sembla una fuga de memòria. El reinicio?",
+                          f"'{name}' is constantly accumulating RAM ({first // 1024} → {last // 1024} MB in a few mins). Seems like a memory leak. Restart it?"),
             "fix": f"kill {pid}",
-            "label": "Reinicia'l",
+            "label": _T("Reinicia'l", "Restart it"),
         }
 
     def _drain_rate(self) -> Optional[float]:
@@ -515,10 +528,10 @@ class Brain:
         return {
             "id": "fast_drain",
             "category": "battery",
-            "message": (f"La bateria baixa molt ràpid ({eta_txt} al ritme actual). "
-                        f"El que més consumeix ara és '{name}'."),
+            "message": _T(f"La bateria baixa molt ràpid ({eta_txt} al ritme actual). El que més consumeix ara és '{name}'.",
+                          f"Battery draining very fast ({eta_txt} at current rate). Top consumer right now is '{name}'."),
             "fix": None,
-            "label": "Entesos",
+            "label": _T("Entesos", "Got it"),
         }
 
     def in_focus_mode(self) -> bool:
@@ -553,8 +566,8 @@ class Brain:
         if not paused:
             return None
         undo = "; ".join(f"pkill -CONT -x {a}" for a in paused)
-        return (undo, f"👻 Sincronitzacions en pausa ({', '.join(paused)}): "
-                      "estalvi amb bateria baixa.")
+        return (undo, _T(f"👻 Sincronitzacions en pausa ({', '.join(paused)}): estalvi amb bateria baixa.",
+                     f"👻 Syncs paused ({', '.join(paused)}): saving battery."))
 
     # ===================================================================== #
     #  Transparència ("què saps de mi?")

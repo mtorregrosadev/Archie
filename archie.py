@@ -158,18 +158,37 @@ class State:
 #  Vista d'estat per consola (no necessita GTK)
 # --------------------------------------------------------------------------- #
 CATEGORY_LABELS = {
-    "thermals": "🌡️  Tèrmica",
-    "cpu": "⚡ CPU & energia",
-    "memory": "🧠 Memòria",
-    "ssd": "💾 SSD & disc",
-    "wayland": "🌐 Wayland vs X11",
-    "boot": "🚀 Arrencada",
-    "battery": "🔋 Bateria",
-    "security": "🔒 Seguretat",
-    "gpu": "🎮 GPU",
-    "network": "🌐 Xarxa",
-    "performance": "🖥️  Rendiment",
+    "ca": {
+        "thermals": "🌡️  Tèrmica",
+        "cpu": "⚡ CPU & energia",
+        "memory": "🧠 Memòria",
+        "ssd": "💾 SSD & disc",
+        "wayland": "🌐 Wayland vs X11",
+        "boot": "🚀 Arrencada",
+        "battery": "🔋 Bateria",
+        "security": "🔒 Seguretat",
+        "gpu": "🎮 GPU",
+        "network": "🌐 Xarxa",
+        "performance": "🖥️  Rendiment",
+    },
+    "en": {
+        "thermals": "🌡️  Thermals",
+        "cpu": "⚡ CPU & Power",
+        "memory": "🧠 Memory",
+        "ssd": "💾 SSD & Disk",
+        "wayland": "🌐 Wayland vs X11",
+        "boot": "🚀 Boot",
+        "battery": "🔋 Battery",
+        "security": "🔒 Security",
+        "gpu": "🎮 GPU",
+        "network": "🌐 Network",
+        "performance": "🖥️  Performance",
+    }
 }
+
+def _T(ca: str, en: str) -> str:
+    return en if os.environ.get("ARCHIE_LANG", "ca") == "en" else ca
+
 
 
 def run_fix_all_cli() -> int:
@@ -177,17 +196,15 @@ def run_fix_all_cli() -> int:
     def c(code: str, text: str) -> str:
         return f"\033[{code}m{text}\033[0m" if color else text
 
-    print(c("1;38;5;183", "\n 🐱 Archie — Taller de reparació ràpida"))
-    print(c("90", " Avaluant l'estat del sistema i aplicant solucions...\n"))
+    print(c("1;38;5;183", _T("\n 🐱 Archie — Taller de reparació ràpida", "\n 🐱 Archie — Quick Repair Shop")))
+    print(c("90", _T(" Avaluant l'estat del sistema i aplicant solucions...\n", " Evaluating system state and applying solutions...\n")))
 
-    # Demanem sudo per endavant perquè els fixes silenciosos que el necessitin
-    # no s'encallin (o fallin directament) demanant contrasenyes invisibles.
     subprocess.run(["sudo", "-v"], check=False)
 
     try:
         results = monitor.evaluate_all(force=True)
     except FileNotFoundError:
-        print("archie: no trobo archie_checks.yaml", file=sys.stderr)
+        print(_T("archie: no trobo archie_checks.yaml", "archie: could not find archie_checks.yaml"), file=sys.stderr)
         return 1
 
     state = State()
@@ -199,36 +216,37 @@ def run_fix_all_cli() -> int:
             if state.is_blocked(chk.id):
                 continue
 
-            print(f" ⚙️  Arreglant: {c('1', chk.id)}", end="", flush=True)
+            print(f" ⚙️  {_T('Arreglant:', 'Fixing:')} {c('1', chk.id)}", end="", flush=True)
             ok = monitor.run_fix(chk.run_command, silent=True)
             
             if ok:
-                print(f"\r {c('32', '✓')} {c('1', chk.id)} " + c("90", "(aplicat amb èxit)"))
+                print(f"\r {c('32', '✓')} {c('1', chk.id)} " + c("90", _T("(aplicat amb èxit)", "(successfully applied)")))
                 fixed_count += 1
                 if chk.once:
                     state.mark_applied(chk.id)
             else:
-                print(f"\r {c('31', '✗')} {c('1', chk.id)} " + c("31", "(ha fallat l'script)"))
+                print(f"\r {c('31', '✗')} {c('1', chk.id)} " + c("31", _T("(ha fallat l'script)", "(script failed)")))
                 failed_count += 1
 
-    print(f"\n {c('1;32', str(fixed_count) + ' problemes solucionats.')}")
+    print(f"\n {c('1;32', str(fixed_count) + _T(' problemes solucionats.', ' problems fixed.'))}")
     if failed_count:
-        print(f" {c('31', str(failed_count) + ' han fallat (potser requereixen terminal complet o més temps).')}")
+        print(f" {c('31', str(failed_count) + _T(' han fallat (potser requereixen terminal complet o més temps).', ' failed (might require full terminal or more time).'))}")
     print()
     return 0
 
 def run_status_cli() -> int:
     color = sys.stdout.isatty()
+    lang = os.environ.get("ARCHIE_LANG", "ca")
     def c(code: str, text: str) -> str:
         return f"\033[{code}m{text}\033[0m" if color else text
 
     try:
         results = monitor.evaluate_all(force=True)
     except FileNotFoundError:
-        print("archie: no trobo archie_checks.yaml", file=sys.stderr)
+        print(_T("archie: no trobo archie_checks.yaml", "archie: could not find archie_checks.yaml"), file=sys.stderr)
         return 1
 
-    print(c("1;38;5;183", "\n 🐱 Archie — estat del sistema") +
+    print(c("1;38;5;183", _T("\n 🐱 Archie — estat del sistema", "\n 🐱 Archie — system status")) +
           c("90", f"   ({time.strftime('%Y-%m-%d %H:%M')})\n"))
 
     by_cat = defaultdict(list)
@@ -242,8 +260,8 @@ def run_status_cli() -> int:
         monitor.ERROR: ("33", "‼"),
     }
     note = {
-        monitor.SKIP: " (omès — eina no instal·lada)",
-        monitor.ERROR: " (error / timeout)",
+        monitor.SKIP: _T(" (omès — eina no instal·lada)", " (skipped — tool not installed)"),
+        monitor.ERROR: _T(" (error / timeout)", " (error / timeout)"),
     }
 
     order = monitor.CATEGORY_ORDER + [k for k in by_cat if k not in monitor.CATEGORY_ORDER]
@@ -251,11 +269,11 @@ def run_status_cli() -> int:
     for cat in order:
         if cat not in by_cat:
             continue
-        print(" " + c("1", CATEGORY_LABELS.get(cat, cat)))
+        print(" " + c("1", CATEGORY_LABELS[lang].get(cat, cat)))
         for chk, st in sorted(by_cat[cat], key=lambda x: x[0].order):
             counts[st] += 1
-            code, glyph = sym[st]
-            line = f"   {c(code, glyph)} {chk.id}"
+            code_c, glyph = sym[st]
+            line = f"   {c(code_c, glyph)} {chk.id}"
             if st == monitor.ALERT:
                 line += "  " + c("90", "→ ") + chk.display_message
             elif st in note:
@@ -264,17 +282,16 @@ def run_status_cli() -> int:
         print()
 
     summary = (
-        f"{c('31', str(counts[monitor.ALERT]) + ' alertes')}   "
+        f"{c('31', str(counts[monitor.ALERT]) + _T(' alertes', ' alerts'))}   "
         f"{c('32', str(counts[monitor.OK]) + ' OK')}   "
-        f"{c('90', str(counts[monitor.SKIP]) + ' omesos')}"
+        f"{c('90', str(counts[monitor.SKIP]) + _T(' omesos', ' skipped'))}"
     )
     if counts[monitor.ERROR]:
-        summary += f"   {c('33', str(counts[monitor.ERROR]) + ' errors')}"
+        summary += f"   {c('33', str(counts[monitor.ERROR]) + _T(' errors', ' errors'))}"
     print(" " + summary)
     if counts[monitor.ALERT]:
-        print(c("90", " Consell: «archie check» ho mostra com a bombolla flotant.\n"))
+        print(c("90", _T(" Consell: «archie check» ho mostra com a bombolla flotant.\n", " Tip: «archie check» shows it as a floating bubble.\n")))
     return 0
-
 
 def run_brain_cli() -> int:
     """Transparència: què ha mostrejat i après l'Archie de tu."""
@@ -283,68 +300,65 @@ def run_brain_cli() -> int:
         return f"\033[{code}m{text}\033[0m" if color else text
 
     info = brain.Brain(State()).insights()
-    print(c("1;38;5;183", "\n 🧠 Archie — què sé de tu"))
+    print(c("1;38;5;183", _T("\n 🧠 Archie — què sé de tu", "\n 🧠 Archie — what I know about you")))
 
     bat = info["battery"]
     pct = f"{bat['pct']}%" if bat["pct"] is not None else "—"
-    estat = "🔋 amb bateria" if bat["on_battery"] else "🔌 endollat"
+    estat = _T("🔋 amb bateria", "🔋 on battery") if bat["on_battery"] else _T("🔌 endollat", "🔌 plugged in")
     if bat.get("eta_min"):
         estat += f" (~{bat['eta_min']} min)"
-    repos = "en repòs" if info["idle"] else "actiu"
+    repos = _T("en repòs", "idle") if info["idle"] else _T("actiu", "active")
     loads = ", ".join(f"{l:.2f}" for l in info["loads"]) or "—"
-    print(c("90", f"   {estat} · bateria {pct} · {repos} · "
-                  f"{info['samples']} mostres · càrrega recent [{loads}]"))
+    print(c("90", f"   {estat} · {_T('bateria', 'battery')} {pct} · {repos} · "
+                  f"{info['samples']} {_T('mostres', 'samples')} · {_T('càrrega recent', 'recent load')} [{loads}]"))
     if info.get("focus"):
-        print(c("33", "   🎬 Mode focus actiu: ara mateix només t'avisaria de coses crítiques."))
+        print(c("33", _T("   🎬 Mode focus actiu: ara mateix només t'avisaria de coses crítiques.", "   🎬 Focus mode active: right now I would only warn you about critical things.")))
     print()
 
     ghosts = info["ghosts"]
-    print(" " + c("1", "👻 Accions actives ara mateix"))
+    print(" " + c("1", _T("👻 Accions actives ara mateix", "👻 Currently active actions")))
     if not ghosts:
-        print(c("90", "   (cap — no he canviat res del teu sistema)"))
+        print(c("90", _T("   (cap — no he canviat res del teu sistema)", "   (none — I haven't changed anything on your system)")))
     for g in ghosts:
-        tag = c("36", "[après]") if g["learned"] else c("35", "[auto-desfà]" if g["auto_restore"] else "[manual]")
+        tag = c("36", _T("[après]", "[learned]")) if g["learned"] else c("35", _T("[auto-desfà]", "[auto-undo]") if g["auto_restore"] else _T("[manual]", "[manual]"))
         print(f"   • {tag} {g['msg']}")
-    print(c("90", "   Pots desfer-ho tot amb «archie undo».\n"))
+    print(c("90", _T("   Pots desfer-ho tot amb «archie undo».\n", "   You can undo everything with «archie undo».\n")))
 
     habits = info["habits"]
-    print(" " + c("1", "📚 Hàbits apresos"))
+    print(" " + c("1", _T("📚 Hàbits apresos", "📚 Learned habits")))
     if not habits:
-        print(c("90", "   (encara no he après res; t'aniré coneixent)"))
+        print(c("90", _T("   (encara no he après res; t'aniré coneixent)", "   (I haven't learned anything yet; I'll get to know you)")))
     for h in habits:
         a, d = h["accept"], h["dismiss"]
         if h["auto_disabled"]:
-            mark = c("31", "ho faig sol: NO (ho vas desfer)")
+            mark = c("31", _T("ho faig sol: NO (ho vas desfer)", "auto apply: NO (you undid it)"))
         elif h["auto"] and h["streak_accept"] >= 3:
-            mark = c("32", "ho faig sol ✓")
+            mark = c("32", _T("ho faig sol ✓", "auto apply ✓"))
         elif h["auto"]:
             falten = max(0, 3 - h["streak_accept"])
-            mark = c("33", f"a {falten} accepts de fer-ho sol") if falten else c("32", "ho faig sol ✓")
+            mark = c("33", f"{_T('a', 'needs')} {falten} {_T('accepts de fer-ho sol', 'accepts to auto apply')}") if falten else c("32", _T("ho faig sol ✓", "auto apply ✓"))
         else:
-            mark = c("90", "només suggeriment")
+            mark = c("90", _T("només suggeriment", "suggestion only"))
         print(f"   • {c('1', h['id'])}  "
               + c("32", f"✓{a}") + " " + c("31", f"✗{d}")
-              + (c("90", f"  (ignorat {h['streak_dismiss']}× seguits)") if h["streak_dismiss"] else "")
+              + (c("90", f"  ({_T('ignorat', 'ignored')} {h['streak_dismiss']}× {_T('seguits', 'in a row')})") if h["streak_dismiss"] else "")
               + f"  — {mark}")
     print()
     return 0
 
-
 def run_undo_cli() -> int:
     done = brain.Brain(State()).undo_all()
     if not done:
-        print("archie: no hi ha cap acció activa per desfer.")
+        print(_T("archie: no hi ha cap acció activa per desfer.", "archie: no active action to undo."))
         return 0
     for gid, msg in done:
         print(f"  ↩  {gid}  {msg}")
-    print(f"\narchie: {len(done)} acció(ns) desfeta(es).")
+    print(_T(f"\narchie: {len(done)} acció(ns) desfeta(es).", f"\narchie: {len(done)} action(s) undone."))
     return 0
-
 
 def run_reset_cli() -> int:
     hard = len(sys.argv) > 2 and sys.argv[2].lower() in ("all", "--all", "hard", "tot")
     st = State()
-    # Desfés primer qualsevol automatització activa, per no deixar el sistema tocat.
     brain.Brain(st).undo_all()
     st.data["snoozed"] = {}
     if hard:
@@ -354,9 +368,118 @@ def run_reset_cli() -> int:
         st.data.pop("last_ghost_time", None)
     st._save()
     if hard:
-        print("archie: estat reiniciat DEL TOT (snoozes, optimitzacions i aprenentatge).")
+        print(_T("archie: estat reiniciat DEL TOT (snoozes, optimitzacions i aprenentatge).", "archie: state reset COMPLETELY (snoozes, optimizations and learning)."))
     else:
-        print("archie: snoozes esborrats (l'aprenentatge es manté). Usa «archie reset all» per esborrar-ho tot.")
+        print(_T("archie: snoozes esborrats (l'aprenentatge es manté). Usa «archie reset all» per esborrar-ho tot.", "archie: snoozes cleared (learning is kept). Use «archie reset all» to clear everything."))
+    return 0
+
+def run_config_cli() -> int:
+    import curses
+
+    def draw_menu(stdscr):
+        curses.curs_set(0)
+        curses.start_color()
+        curses.use_default_colors()
+        curses.init_pair(1, -1, -1)
+        curses.init_pair(2, curses.COLOR_YELLOW, -1)
+        curses.init_pair(3, curses.COLOR_BLACK, curses.COLOR_WHITE)
+
+        stdscr.bkgd(' ', curses.color_pair(1))
+
+        state = State()
+        config = state.data.get("config", {})
+        
+        options = [
+            {"key": "lang", "label_ca": "Idioma", "label_en": "Language", "choices": ["ca", "en"], "default": "ca"},
+            {"key": "check_interval", "label_ca": "Interval de comprovació (segons)", "label_en": "Check interval (seconds)", "choices": [30, 60, 120, 300], "default": 60},
+            {"key": "min_gap", "label_ca": "Temps mínim entre avisos (minuts)", "label_en": "Minimum gap between alerts (minutes)", "choices": [5, 10, 15, 30, 60], "default": 15},
+            {"key": "timeout", "label_ca": "Temps visible de la bombolla (segons)", "label_en": "Bubble visible time (seconds)", "choices": [10, 20, 30, 0], "default": 20},
+        ]
+        
+        current_row = 0
+
+        while True:
+            lang = config.get("lang", "ca")
+            stdscr.clear()
+            
+            title = "🐱 Archie - Configuration" if lang == "en" else "🐱 Archie - Configuració"
+            stdscr.addstr(1, 2, title, curses.color_pair(2) | curses.A_BOLD)
+            
+            inst1 = "Use the arrows (↑/↓) to navigate and (←/→) to change values." if lang == "en" else "Utilitza les fletxes (↑/↓) per moure't i (←/→) per canviar els valors."
+            inst2 = "Press [Enter] to Save and Exit, or [Esc] to cancel." if lang == "en" else "Prem [Enter] per Desar i Sortir, o [Esc] per cancel·lar."
+            
+            stdscr.addstr(2, 2, inst1, curses.color_pair(1))
+            stdscr.addstr(3, 2, inst2, curses.color_pair(1))
+            
+            for idx, opt in enumerate(options):
+                x = 4
+                y = 6 + idx * 2
+                val = config.get(opt["key"], opt["default"])
+                
+                if opt["key"] == "timeout" and val == 0:
+                    val_str = "Infinite" if lang == "en" else "Infinit"
+                elif opt["key"] == "lang":
+                    val_str = "English" if val == "en" else "Català"
+                else:
+                    val_str = str(val)
+                
+                label = opt["label_en"] if lang == "en" else opt["label_ca"]
+                label_str = f"{label}: < {val_str} >"
+                
+                if idx == current_row:
+                    stdscr.addstr(y, x, label_str, curses.color_pair(3) | curses.A_BOLD)
+                else:
+                    stdscr.addstr(y, x, label_str, curses.color_pair(1))
+            
+            stdscr.refresh()
+            key = stdscr.getch()
+            
+            if key == curses.KEY_UP and current_row > 0:
+                current_row -= 1
+            elif key == curses.KEY_DOWN and current_row < len(options) - 1:
+                current_row += 1
+            elif key == curses.KEY_LEFT:
+                opt = options[current_row]
+                val = config.get(opt["key"], opt["default"])
+                try:
+                    idx = opt["choices"].index(val)
+                    if idx > 0:
+                        config[opt["key"]] = opt["choices"][idx - 1]
+                except ValueError:
+                    config[opt["key"]] = opt["choices"][0]
+            elif key == curses.KEY_RIGHT:
+                opt = options[current_row]
+                val = config.get(opt["key"], opt["default"])
+                try:
+                    idx = opt["choices"].index(val)
+                    if idx < len(opt["choices"]) - 1:
+                        config[opt["key"]] = opt["choices"][idx + 1]
+                except ValueError:
+                    config[opt["key"]] = opt["choices"][-1]
+            elif key in [10, 13]: # Enter
+                state.data["config"] = config
+                state._save()
+                return True
+            elif key == 27: # Esc
+                return False
+                
+    try:
+        saved = curses.wrapper(draw_menu)
+        lang = State().data.get("config", {}).get("lang", "ca")
+        if saved:
+            if lang == "en":
+                print("\n 🐱 Configuration saved and applied successfully.")
+                print(" Restart the Archie service to apply changes: systemctl --user restart archie")
+            else:
+                print("\n 🐱 Configuració guardada i aplicada correctament.")
+                print(" Reinicia el servei de l'Archie per aplicar els canvis: systemctl --user restart archie")
+        else:
+            if lang == "en":
+                print("\n ❌ Configuration cancelled.")
+            else:
+                print("\n ❌ Configuració cancel·lada.")
+    except Exception as e:
+        print(f"\n Error: {e}")
     return 0
 
 
@@ -423,6 +546,9 @@ def run_gui(mode: str) -> int:
             self._scheduled = False
             self._shown_times = {}
 
+        def _get_config(self, key: str, default_value: int) -> int:
+            return self.state.data.get("config", {}).get(key, default_value)
+
         # -- cicle de vida ------------------------------------------------- #
         def do_activate(self) -> None:
             if self.win is None:
@@ -439,12 +565,13 @@ def run_gui(mode: str) -> int:
 
         def _initial_check(self) -> bool:
             self.run_checks()
-            GLib.timeout_add_seconds(CHECK_INTERVAL, self._periodic_check)
+            GLib.timeout_add_seconds(self._get_config("check_interval", CHECK_INTERVAL), self._periodic_check)
             return GLib.SOURCE_REMOVE
 
         def _periodic_check(self) -> bool:
             self.run_checks()
-            return GLib.SOURCE_CONTINUE
+            GLib.timeout_add_seconds(self._get_config("check_interval", CHECK_INTERVAL), self._periodic_check)
+            return GLib.SOURCE_REMOVE
 
         # -- UI ------------------------------------------------------------ #
         def _build_ui(self) -> None:
@@ -500,10 +627,11 @@ def run_gui(mode: str) -> int:
 
             btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
             btns.set_halign(Gtk.Align.END)
-            self.fix_btn = Gtk.Button(label="Arregla-ho")
+            lang = os.environ.get("ARCHIE_LANG", "ca")
+            self.fix_btn = Gtk.Button(label="Fix it" if lang == "en" else "Arregla-ho")
             self.fix_btn.add_css_class("fix")
             self.fix_btn.connect("clicked", self.on_fix)
-            self.later_btn = Gtk.Button(label="Ara no")
+            self.later_btn = Gtk.Button(label="Not now" if lang == "en" else "Ara no")
             self.later_btn.add_css_class("later")
             self.later_btn.connect("clicked", self.on_later)
             btns.append(self.fix_btn)
@@ -530,7 +658,10 @@ def run_gui(mode: str) -> int:
             # Purga entrades velles perquè el dict no creixi sense límit.
             cutoff = time.time() - 7200
             self._shown_times = {k: v for k, v in self._shown_times.items() if v > cutoff}
-            recent_shown = (time.time() - self.state.last_shown < MIN_GAP)
+            
+            min_gap_secs = self._get_config("min_gap", MIN_GAP // 60) * 60
+            recent_shown = (time.time() - self.state.last_shown < min_gap_secs)
+            
             self._sweeping = True
             threading.Thread(
                 target=self._sweep_worker,
@@ -608,11 +739,12 @@ def run_gui(mode: str) -> int:
                     and b.should_autoapply(check)):
                 monitor.run_fix(check.run_command, silent=True)
                 b.mark_autoapplied(check)
+                lang = os.environ.get("ARCHIE_LANG", "ca")
+                suffix = "\n(Ho he fet jo sol perquè sempre ho acceptes. «Desfés» si no toca.)" if lang != "en" else "\n(I did it automatically because you always accept it. «Undo» if not appropriate.)"
                 vc = monitor.Check(
                     id=check.id, category="ghost",
-                    message=f"🤖 {check.display_message}\n"
-                            "(Ho he fet jo sol perquè sempre ho acceptes. «Desfés» si no toca.)",
-                    detect="", fix=check.undo, label="Desfés")
+                    message=f"🤖 {check.display_message}{suffix}",
+                    detect="", fix=check.undo, label="Desfés" if lang != "en" else "Undo")
                 vc._is_ghost = True
                 vc._ghost_id = check.id
                 vc._learned = True
@@ -630,9 +762,11 @@ def run_gui(mode: str) -> int:
         def _check_done(self, check) -> bool:
             self._sweeping = False
             if check is None:
+                lang = os.environ.get("ARCHIE_LANG", "ca")
+                msg = "Tot sembla correcte ✓\nCap optimització pendent ara mateix." if lang != "en" else "Everything looks good ✓\nNo pending optimizations right now."
                 check = monitor.Check(
                     id="all_ok", category="info",
-                    message="Tot sembla correcte ✓\nCap optimització pendent ara mateix.",
+                    message=msg,
                     detect="", fix=None)
             self._present(check, record=False)
             return False
@@ -647,19 +781,19 @@ def run_gui(mode: str) -> int:
             
             is_ghost = getattr(check, "_is_ghost", False)
             
+            lang = os.environ.get("ARCHIE_LANG", "ca")
             if check.fix:
-                self.fix_btn.set_label(check.label or "Arregla-ho")
+                self.fix_btn.set_label(getattr(check, "display_label", check.label) or ("Fix it" if lang == "en" else "Arregla-ho"))
                 self.fix_btn.set_visible(True)
                 if is_ghost:
                     self.later_btn.set_visible(False)
-                    # En mode ghost, "Arregla-ho" en realitat és "Desfés"
                 else:
                     self.later_btn.set_visible(True)
-                    self.later_btn.set_label("Ara no")
+                    self.later_btn.set_label("Not now" if lang == "en" else "Ara no")
             else:
                 self.fix_btn.set_visible(False)
                 self.later_btn.set_visible(True)
-                self.later_btn.set_label("Entesos")
+                self.later_btn.set_label("Got it" if lang == "en" else "Entesos")
 
             if record and self.mode == "daemon" and not is_ghost:
                 self.state.mark_shown(check.id)
@@ -669,7 +803,7 @@ def run_gui(mode: str) -> int:
                 else CHECK_MODE_TIMEOUT if self.mode == "check"
                 # Avisos de restauració (només informatius) curts; les accions
                 # amb "Desfés" duren el normal perquè hi puguis reaccionar.
-                else 5 if getattr(check, "_ghost_restore", False) else DEFAULT_TIMEOUT
+                else 5 if getattr(check, "_ghost_restore", False) else self._get_config("timeout", DEFAULT_TIMEOUT)
             )
 
             self.bubble.set_opacity(0.0)
@@ -695,10 +829,12 @@ def run_gui(mode: str) -> int:
             GLib.timeout_add_seconds(3, delayed_sweep)
 
         def _show_demo(self) -> None:
+            lang = os.environ.get("ARCHIE_LANG", "ca")
+            msg = "Hola! Sóc l'Archie 🐱\nAixí et donaré els suggeriments.\n(Això és una demo, no marxa sola.)" if lang != "en" else "Hi! I'm Archie 🐱\nThis is how I will give you suggestions.\n(This is a demo, it doesn't leave on its own.)"
             demo = monitor.Check(
                 id="demo", category="info",
-                message="Hola! Sóc l'Archie 🐱\nAixí et donaré els suggeriments.\n(Això és una demo, no marxa sola.)",
-                detect="", fix="true", label="Arregla-ho")
+                message=msg,
+                detect="", fix="true", label="Arregla-ho" if lang != "en" else "Fix it")
             self._present(demo, record=False)
 
         def _hide(self) -> None:
@@ -816,6 +952,8 @@ def run_gui(mode: str) -> int:
 #  Entrada
 # --------------------------------------------------------------------------- #
 def main() -> int:
+    state = State()
+    os.environ["ARCHIE_LANG"] = state.data.get("config", {}).get("lang", "ca")
     args = sys.argv[1:]
     mode = "daemon"
     if args:
@@ -834,12 +972,14 @@ def main() -> int:
             mode = "undo"
         elif a == "reset":
             mode = "reset"
+        elif a in ("config", "conf", "c"):
+            mode = "config"
         elif a in ("help", "h"):
             print(__doc__)
             return 0
         else:
             print(f"archie: mode desconegut '{args[0]}'. "
-                  "Prova: status, brain, undo, reset, fix, demo, check, help",
+                  "Prova: status, brain, undo, reset, fix, demo, check, config, help",
                   file=sys.stderr)
             return 2
 
@@ -853,6 +993,8 @@ def main() -> int:
         return run_reset_cli()
     if mode == "fix":
         return run_fix_all_cli()
+    if mode == "config":
+        return run_config_cli()
 
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     return run_gui(mode)
