@@ -20,12 +20,13 @@ checks:
   # 🌡️  THERMALS
   # ═══════════════════════════════════════
 
-  - id: cpu_temp_high
+  - id: thermal_overload_explainer
     category: thermals
     critical: true
-    message: "Alerta! CPU a >85°C. El procés '{}' l'està ofegant. Tanca'l abans que es sobreescalfi."
-    detect: "temp=$(sensors | grep 'Package id 0' | awk '{print $4}' | tr -d '+°C' | awk -F. '{print $1}'); if [ -n \"$temp\" ] && [ \"$temp\" -gt 85 ]; then proc=$(ps aux --sort=-%cpu | awk 'NR==2 {print $11}'); basename \"$proc\"; exit 0; else exit 1; fi"
-    fix: null
+    message: "🌪️ Buf! Els ventiladors van a fons perquè {}. Vols aturar aquest procés per refredar la màquina?"
+    detect: "temp=$(sensors 2>/dev/null | awk '/Package id 0/{print $4}' | tr -d '+°C' | cut -d. -f1); fan=$(cat /sys/devices/platform/applesmc.768/fan1_input 2>/dev/null || echo 0); pid=$(archie_top_pid pcpu); [ -n \"$pid\" ] || exit 1; name=$(archie_proc_label \"$pid\"); cpu=$(ps -p \"$pid\" -o %cpu= | tr -d ' '); if [ -n \"$temp\" ] && [ \"$temp\" -gt 80 ]; then echo \"el procés '$name' està cremant un $cpu% de CPU i la temperatura s'ha disparat a $temp°C\"; exit 0; elif [ \"$fan\" -gt 4500 ]; then echo \"el procés '$name' ($cpu% CPU) està forçant els ventiladors al màxim\"; exit 0; else exit 1; fi"
+    fix: "pid=$(archie_top_pid pcpu); [ -n \"$pid\" ] && kill -9 \"$pid\""
+    label: "Fulmina'l"
 
   - id: mbpfan_inactive
     category: thermals
@@ -48,6 +49,16 @@ checks:
     message: "CPU en mode extrem. Puc posar-la a 'balanced' per estalviar bateria sense perdre fluïdesa?"
     detect: "cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor | grep -qv 'balanced\\|power-saver\\|schedutil'"
     fix: "powerprofilesctl set balanced"
+    undo: "powerprofilesctl set performance"
+    auto: true
+
+  - id: turbo_boost_on_battery
+    category: cpu
+    message: "Estàs amb bateria i el Turbo Boost crema CPU i autonomia. El desactivo mentre no estiguis endollat?"
+    detect: "[ -r /sys/devices/system/cpu/intel_pstate/no_turbo ] && grep -qx Discharging /sys/class/power_supply/BAT*/status 2>/dev/null && [ \"$(cat /sys/devices/system/cpu/intel_pstate/no_turbo)\" = 0 ]"
+    fix: "echo 1 | sudo tee /sys/devices/system/cpu/intel_pstate/no_turbo"
+    undo: "echo 0 | sudo tee /sys/devices/system/cpu/intel_pstate/no_turbo"
+    label: "Activa estalvi"
 
   - id: power_profiles_inactive
     category: cpu
@@ -60,6 +71,8 @@ checks:
     message: "Bateria <40% en mode rendiment. Activo l'estalvi d'energia per no quedar-te tirat?"
     detect: "cat /sys/class/power_supply/BAT0/capacity | awk '{if ($1 < 40) exit 0; else exit 1}' && powerprofilesctl get | grep -q performance"
     fix: "powerprofilesctl set power-saver"
+    undo: "powerprofilesctl set balanced"
+    auto: true
 
   # ═══════════════════════════════════════
   # 🧠 MEMÒRIA RAM
@@ -68,9 +81,10 @@ checks:
   - id: oom_imminent
     category: memory
     critical: true
-    message: "Alerta! <500MB de RAM lliure. El PC es penjarà aviat. Tanca aplicacions ARA!"
-    detect: "free -m | awk '/^Mem/ {if ($7 < 500) exit 0; else exit 1}'"
-    fix: null
+    message: "Alerta! <500MB de RAM lliure. El PC es penjarà aviat. Tanco el procés que més memòria gasta ('{}')?"
+    detect: "free -m | awk '/^Mem/ {if ($7 < 500) exit 0; else exit 1}' && { pid=$(archie_top_pid pmem); [ -n \"$pid\" ] && archie_proc_label \"$pid\"; }"
+    fix: "pid=$(archie_top_pid pmem); [ -n \"$pid\" ] && kill -9 \"$pid\""
+    label: "Allibera RAM"
 
   - id: ram_usage_high
     category: memory
@@ -81,8 +95,8 @@ checks:
   - id: high_ram_process
     category: memory
     message: "'{}' es menja >30% de la RAM. El tanco a la força?"
-    detect: "proc=$(ps aux --sort=-%mem | awk 'NR==2 {if ($4 > 30) print $11}'); if [ -n \"$proc\" ]; then basename \"$proc\"; exit 0; else exit 1; fi"
-    fix: "killall -9 $(ps aux --sort=-%mem | awk 'NR==2 {print $11}' | xargs basename)"
+    detect: "pid=$(archie_top_pid pmem); [ -n \"$pid\" ] || exit 1; mem=$(ps -p \"$pid\" -o %mem= | tr -d ' '); awk -v m=$mem 'BEGIN{exit !(m>30)}' || exit 1; archie_proc_label \"$pid\""
+    fix: "pid=$(archie_top_pid pmem); [ -n \"$pid\" ] && kill -9 \"$pid\""
     label: "Tanca'l"
 
   - id: swappiness_high
@@ -132,9 +146,9 @@ checks:
 
   - id: pacman_cache_large
     category: ssd
-    message: "La cache de pacman ocupa +3GB. Vols esborrar-la per alliberar disc?"
+    message: "La cache de pacman ocupa +3GB. La buido deixant només l'última versió de cada paquet?"
     detect: "du -s /var/cache/pacman/pkg 2>/dev/null | awk '{if ($1 > 3000000) exit 0; else exit 1}'"
-    fix: "if command -v paccache >/dev/null; then sudo paccache -r; else sudo pacman -Sc --noconfirm; fi"
+    fix: "if command -v paccache >/dev/null; then sudo paccache -rk1; else sudo pacman -Scc --noconfirm; fi"
 
   - id: journal_size_large
     category: ssd
@@ -163,6 +177,18 @@ checks:
     fix: "sudo bash -c 'echo \"ACTION==\\\"add|change\\\", KERNEL==\\\"sd[a-z]*\\\", ATTR{queue/rotational}==\\\"0\\\", ATTR{queue/scheduler}=\\\"mq-deadline\\\"\" > /etc/udev/rules.d/60-ioschedulers.rules' && sudo udevadm control --reload && sudo udevadm trigger"
     once: true
 
+  - id: coredumps_piling
+    category: ssd
+    message: "Tens bolcats de memòria (coredumps de programes petats) ocupant +200MB de disc. Els esborro?"
+    detect: "sz=$(du -sm /var/lib/systemd/coredump 2>/dev/null | awk '{print $1}'); [ -n \"$sz\" ] && [ \"$sz\" -gt 200 ]"
+    fix: "sudo rm -f /var/lib/systemd/coredump/* && sudo journalctl --rotate"
+
+  - id: docker_dangling
+    category: ssd
+    message: "Tens imatges i capes de Docker penjades (dangling) ocupant disc. Les netejo?"
+    detect: "docker images -f dangling=true -q 2>/dev/null | grep -q ."
+    fix: "docker image prune -f && docker builder prune -f"
+
   # ═══════════════════════════════════════
   # 🌐 APPS: WAYLAND vs X11
   # ═══════════════════════════════════════
@@ -183,26 +209,31 @@ checks:
 
   - id: electron_x11
     category: wayland
-    message: "Tens apps Electron (Claude, VSCode) usant X11. Hauries de configurar-les a Wayland."
-    detect: "ps aux | grep electron | grep -v grep | grep -q 'x11'"
-    fix: null
+    message: "Les teves apps Electron (Claude, VSCode…) corren sobre X11 i gasten més bateria. Les configuro perquè usin Wayland natiu? (s'aplica al proper inici de sessió)"
+    detect: "ps aux | grep -v grep | grep electron | grep -q 'ozone-platform=x11'"
+    fix: "mkdir -p ~/.config/environment.d && echo 'ELECTRON_OZONE_PLATFORM_HINT=auto' > ~/.config/environment.d/90-electron-wayland.conf"
+    undo: "rm -f ~/.config/environment.d/90-electron-wayland.conf"
+    label: "Configura-ho"
+    once: true
 
   # ═══════════════════════════════════════
   # 🚀 BOOT
   # ═══════════════════════════════════════
 
-  - id: boot_slow
+  - id: boot_bloat
     category: boot
-    message: "L'ordinador triga +10s a arrencar. Vols veure els programes culpables?"
-    detect: "systemd-analyze | awk '/Startup finished/ {match($0, /= ([0-9.]+)s/, a); if (a[1] > 10) exit 0; else exit 1}'"
-    fix: "systemd-analyze blame | head -20"
-    label: "Mostra-ho"
+    message: "L'arrencada triga massa per culpa del servei '{}' (que és inútil en un portàtil). Puc desactivar-lo amb seguretat per arrencar més ràpid?"
+    detect: "svc=$(systemd-analyze blame 2>/dev/null | awk '/NetworkManager-wait-online|ModemManager|systemd-networkd-wait-online|plymouth-quit-wait/ {if ($1 ~ /[0-9]+s/ && $1+0 > 1) {print $2; exit 0}}'); if [ -n \"$svc\" ]; then echo \"$svc\"; exit 0; else exit 1; fi"
+    fix: "sudo systemctl disable \"{}\""
+    label: "Desactiva'l"
+    once: true
 
-  - id: unnecessary_services
-    category: boot
-    message: "Tens masses serveis invisibles (+30) gastant fons inútilment. T'ensenyo quins són?"
-    detect: "systemctl list-units --type=service --state=running | wc -l | awk '{if ($1 > 30) exit 0; else exit 1}'"
-    fix: null
+  - id: bloat_service_running
+    category: performance
+    message: "El servei d'impressores/mòdems '{}' està actiu de fons inútilment. El desactivo per alliberar memòria?"
+    detect: "svc=$(systemctl list-units --type=service --state=running --plain --no-legend | awk '/ModemManager\\.service|cups\\.service/ {print $1; exit 0}'); if [ -n \"$svc\" ]; then echo \"$svc\"; exit 0; else exit 1; fi"
+    fix: "sudo systemctl disable --now \"{}\""
+    label: "Desactiva'l"
 
   # ═══════════════════════════════════════
   # 🔋 BATERIA
@@ -220,6 +251,14 @@ checks:
     detect: "iwconfig 2>/dev/null | grep -q 'Power Management:off'"
     fix: "sudo iwconfig wlan0 power on"
 
+  - id: audio_powersave_off
+    category: battery
+    message: "El xip d'àudio no entra en repòs i drena bateria de fons. Activo l'estalvi automàtic?"
+    detect: "[ -r /sys/module/snd_hda_intel/parameters/power_save ] && [ \"$(cat /sys/module/snd_hda_intel/parameters/power_save)\" = 0 ]"
+    fix: "echo 1 | sudo tee /sys/module/snd_hda_intel/parameters/power_save && echo 'options snd_hda_intel power_save=1' | sudo tee /etc/modprobe.d/audio_powersave.conf"
+    undo: "echo 0 | sudo tee /sys/module/snd_hda_intel/parameters/power_save"
+    once: true
+
   # ═══════════════════════════════════════
   # 🔒 SEGURETAT
   # ═══════════════════════════════════════
@@ -235,6 +274,13 @@ checks:
     message: "No tens cap tallafocs! Ets vulnerable en xarxes públiques. Configuro l''ufw'?"
     detect: "! systemctl is-active ufw | grep -q active && ! systemctl is-active nftables | grep -q active"
     fix: "sudo pacman -S --noconfirm ufw && sudo ufw enable && sudo systemctl enable --now ufw"
+
+  - id: systemd_units_failed
+    category: security
+    message: "Han fallat serveis del sistema: {}. Els reinicio i netejo l'estat d'error?"
+    detect: "u=$(systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | grep -v '^●' | head -3 | paste -sd, -); [ -n \"$u\" ] && echo \"$u\""
+    fix: "systemctl --failed --no-legend --plain | awk '{print $1}' | grep -v '^●' | xargs -r sudo systemctl restart; sudo systemctl reset-failed"
+    label: "Reinicia'ls"
 
   # ═══════════════════════════════════════
   # 🎮 GPU & GRÀFICS
@@ -269,17 +315,17 @@ checks:
   - id: system_load_high
     category: performance
     critical: true
-    message: "Càrrega extrema del sistema! Vols que et mostri els programes culpables?"
-    detect: "load=$(cat /proc/loadavg | awk '{print $1}'); cores=$(nproc); awk -v l=$load -v c=$cores 'BEGIN {if (l > c*2) exit 0; else exit 1}'"
-    fix: "ps aux --sort=-%cpu | head -10"
-    label: "Mostra-ho"
+    message: "Càrrega extrema del sistema! El procés '{}' està saturant els nuclis. Vols forçar el seu tancament ara mateix?"
+    detect: "load=$(awk '{print $1}' /proc/loadavg); cores=$(nproc); awk -v l=$load -v c=$cores 'BEGIN{exit !(l > c*2)}' || exit 1; pid=$(archie_top_pid pcpu); [ -n \"$pid\" ] || exit 1; archie_proc_label \"$pid\""
+    fix: "pid=$(archie_top_pid pcpu); [ -n \"$pid\" ] && kill -9 \"$pid\""
+    label: "Tanca'l"
 
-  - id: zombie_processes
+  - id: zombie_parent
     category: performance
-    message: "Hi ha processos 'zombi' (penjats però gastant recursos). T'ensenyo quins són?"
-    detect: "[ $(ps axo stat | grep -c '^Z') -gt 5 ]"
-    fix: "ps aux | awk '$8==\"Z\"'"
-    label: "Mostra'ls"
+    message: "El programa '{}' ha deixat processos bloquejats (zombis) gastant memòria inútilment. Tanco el programa per netejar-ho?"
+    detect: "parent=$(ps axo stat,ppid | awk '$1==\"Z\" {print $2}' | sort | uniq -c | sort -nr | head -n1 | awk '{if ($1 > 2 && $2 != 1) print $2}'); if [ -n \"$parent\" ]; then ps -p \"$parent\" -o comm= | tr -d ' '; exit 0; else exit 1; fi"
+    fix: "kill -9 $(ps axo stat,ppid | awk '$1==\"Z\" {print $2}' | sort | uniq -c | sort -nr | head -n1 | awk '{print $2}')"
+    label: "Neteja-ho"
 
   - id: too_many_brave_renderers
     category: performance
@@ -290,6 +336,14 @@ checks:
   - id: high_cpu_process
     category: performance
     message: "'{}' s'està menjant >50% de la CPU. El tanco a la força?"
-    detect: "proc=$(ps aux --sort=-%cpu | awk 'NR==2 {if ($3 > 50) print $11}'); if [ -n \"$proc\" ]; then basename \"$proc\"; exit 0; else exit 1; fi"
-    fix: "killall -9 $(ps aux --sort=-%cpu | awk 'NR==2 {print $11}' | xargs basename)"
+    detect: "pid=$(archie_top_pid pcpu); [ -n \"$pid\" ] || exit 1; cpu=$(ps -p \"$pid\" -o %cpu= | tr -d ' '); awk -v c=$cpu 'BEGIN{exit !(c>50)}' || exit 1; archie_proc_label \"$pid\""
+    fix: "pid=$(archie_top_pid pcpu); [ -n \"$pid\" ] && kill -9 \"$pid\""
     label: "Tanca'l"
+
+  - id: nmi_watchdog_on
+    category: performance
+    message: "El 'NMI watchdog' del kernel consumeix CPU i bateria i gairebé no el necessites. El desactivo de per vida?"
+    detect: "[ \"$(cat /proc/sys/kernel/nmi_watchdog 2>/dev/null)\" = 1 ]"
+    fix: "sudo sysctl kernel.nmi_watchdog=0 && echo 'kernel.nmi_watchdog=0' | sudo tee /etc/sysctl.d/99-nmi-watchdog.conf"
+    undo: "sudo sysctl kernel.nmi_watchdog=1"
+    once: true

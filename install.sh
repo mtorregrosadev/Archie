@@ -42,6 +42,8 @@ if command -v pacman >/dev/null 2>&1; then
     [bind]="dns_slow (dig)"
     [mesa-utils]="direct_rendering (glxinfo)"
     [wireless_tools]="wifi_power_save (iwconfig)"
+    [brightnessctl]="ghost: atenuar pantalla amb bateria baixa"
+    [bluez-utils]="ghost: apagar Bluetooth quan no l'uses"
   )
   for opt in "${!optional[@]}"; do
     pacman -Qq "$opt" >/dev/null 2>&1 || warn "(opcional) pacman -S $opt  → ${optional[$opt]}"
@@ -66,6 +68,7 @@ bold "==> Copiant l'app a $INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
 install -m 0755 "$SRC_DIR/archie.py"          "$INSTALL_DIR/archie.py"
 install -m 0644 "$SRC_DIR/monitor.py"         "$INSTALL_DIR/monitor.py"
+install -m 0644 "$SRC_DIR/brain.py"           "$INSTALL_DIR/brain.py"
 install -m 0644 "$SRC_DIR/archie_checks.yaml" "$INSTALL_DIR/archie_checks.yaml"
 
 # Wrapper a ~/.local/bin perquè puguis fer: archie status | demo | check
@@ -105,6 +108,8 @@ systemctl --user restart archie.service 2>/dev/null || systemctl --user start ar
 echo
 bold "✓ Archie instal·lat i en marxa"
 info "Vista d'estat:   archie status"
+info "Què sap de tu:   archie brain"
+info "Desfer canvis:   archie undo"
 info "Bombolla ara:    archie check"
 info "Exemple/demo:    archie demo"
 info "Servei (estat):  systemctl --user status archie.service"

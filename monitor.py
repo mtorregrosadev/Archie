@@ -36,6 +36,37 @@ CHECKS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 DETECT_TIMEOUT = 8  # segons màxim per comanda de detecció
 
+# Helpers de shell injectats abans de CADA detect i fix. Resolen "qui és el procés
+# culpable" amb un nom llegible —els intèrprets (python/node/bash…) es resolen a
+# l'script real, no a "/usr/sbin/python"— i permeten matar PER PID (segur), no per
+# nom (que podria matar processos que no toca, fins i tot l'Archie).
+_PREAMBLE = r"""
+archie_top_pid() {  # $1 = pcpu (defecte) o pmem
+  ps -eo pid=,comm= --sort=-${1:-pcpu} 2>/dev/null | while read -r _p _c; do
+    case "$_c" in
+      ps|awk|grep|bash|sh|sort|head|cat|sed|tr|cut|paste|wc) continue;;
+    esac
+    echo "$_p"; break
+  done
+}
+archie_proc_label() {  # $1 = PID -> nom llegible
+  [ -z "$1" ] && return
+  _comm=$(ps -p "$1" -o comm= 2>/dev/null); _comm=${_comm##*/}
+  case "$_comm" in
+    python*|node|nodejs|bash|sh|dash|zsh|perl|ruby|java|electron|deno)
+      for _t in $(ps -p "$1" -o args= 2>/dev/null); do
+        case "$_t" in
+          -c) printf '%s' "$_comm"; return;;   # codi inline: no hi ha script
+          -*) continue;;
+          *python*|node|nodejs|*/node|bash|*/bash|sh|*/sh|perl|ruby|java|electron|*/electron) continue;;
+          *) _t=${_t##*/}; printf '%s' "$_t"; return;;
+        esac
+      done;;
+  esac
+  printf '%s' "$_comm"
+}
+"""
+
 # Estats possibles d'un check.
 ALERT = "alert"      # detect ha sortit amb 0 → hi ha cosa a dir
 OK = "ok"            # tot correcte
@@ -98,11 +129,14 @@ class Check:
     label: str = "Arregla-ho"
     once: bool = False
     critical: bool = False
+    undo: Optional[str] = None   # com revertir el fix (per a auto-aplicació i ghost)
+    auto: bool = False           # si true, l'Archie el pot acabar fent sol si és segur
     order: int = 0  # posició dins el fitxer (desempat de prioritat)
 
     _status: str = field(default="unknown", repr=False)
     _last_run: float = field(default=0.0, repr=False)
     _available: Optional[bool] = field(default=None, repr=False)
+    _out: str = field(default="", repr=False)  # stdout del detect, per renderir {}
 
     @property
     def priority(self) -> int:
@@ -143,7 +177,7 @@ class Check:
 
         try:
             result = subprocess.run(
-                ["bash", "-c", self.detect],
+                ["bash", "-c", _PREAMBLE + "\n" + self.detect],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 timeout=DETECT_TIMEOUT,
@@ -152,10 +186,10 @@ class Check:
             rc = result.returncode
             if rc == 0:
                 self._status = ALERT
-                # Si el missatge té {}, injectem el text de sortida del procés
-                out = result.stdout.strip()
-                if out and "{}" in self.message:
-                    self.message = self.message.replace("{}", out)
+                # Desa la sortida per renderir {} EN CALENT, sense mutar el
+                # template (els Check es reutilitzen entre cicles → mutar-los
+                # feia que un cop substituït es quedés enganxat per sempre).
+                self._out = result.stdout.strip()
             else:
                 self._status = OK
         except subprocess.TimeoutExpired:
@@ -164,6 +198,20 @@ class Check:
             self._status = ERROR
         self._last_run = time.time()
         return self._status
+
+    @property
+    def display_message(self) -> str:
+        """El missatge amb {} substituït per la sortida del detect (si n'hi ha)."""
+        if self._out and "{}" in self.message:
+            return self.message.replace("{}", self._out)
+        return self.message
+
+    @property
+    def run_command(self) -> Optional[str]:
+        """El fix amb {} substituït per la sortida del detect (si escau)."""
+        if self.fix and self._out and "{}" in self.fix:
+            return self.fix.replace("{}", self._out)
+        return self.fix
 
 
 # --------------------------------------------------------------------------- #
@@ -246,6 +294,8 @@ def load_checks(path: str = CHECKS_FILE) -> List[Check]:
             label=c.get("label") or "Arregla-ho",
             once=bool(c.get("once", False)),
             critical=bool(c.get("critical", False)),
+            undo=c.get("undo") or None,
+            auto=bool(c.get("auto", False)),
             order=i,
         ))
     return checks
@@ -322,7 +372,7 @@ def run_fix(fix_command: str, silent: bool = False) -> bool:
     if silent:
         try:
             rc = subprocess.run(
-                ["bash", "-c", fix_command],
+                ["bash", "-c", _PREAMBLE + "\n" + fix_command],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             ).returncode
@@ -331,15 +381,22 @@ def run_fix(fix_command: str, silent: bool = False) -> bool:
             return False
 
     term = _find_terminal()
+    # Si va bé: avisa i tanca sol als 2 s (no et fa prémer res).
+    # Si falla: deixa la finestra oberta perquè puguis llegir l'error.
     wrapper = (
         f"{fix_command}\n"
         "rc=$?\n"
         "echo\n"
-        'if [ $rc -eq 0 ]; then echo "✓ Fet."; '
-        'else echo "✗ Ha fallat (codi $rc)."; fi\n'
-        'echo "[ Prem Enter per tancar ]"\n'
-        "read _\n"
+        'if [ $rc -eq 0 ]; then\n'
+        '  echo "✓ Fet. (aquesta finestra es tanca sola…)"\n'
+        '  sleep 2\n'
+        'else\n'
+        '  echo "✗ Ha fallat (codi $rc)."\n'
+        '  echo "[ Prem Enter per tancar ]"\n'
+        '  read _\n'
+        'fi\n'
     )
+    wrapper = _PREAMBLE + "\n" + wrapper
     try:
         if term is not None:
             subprocess.Popen(term + ["bash", "-lc", wrapper],
@@ -369,7 +426,7 @@ if __name__ == "__main__":
     for c, st in sorted(results, key=lambda x: (-x[0].priority, x[0].order)):
         line = f"  {sym[st]} [{st:5}] {c.id}"
         if st == ALERT:
-            line += f"  → {c.message}"
+            line += f"  → {c.display_message}"
         print(line)
     n_alert = sum(1 for _, s in results if s == ALERT)
     print(f"\n{n_alert} alertes en {dt:.2f}s")

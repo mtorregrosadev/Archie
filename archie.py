@@ -3,11 +3,14 @@
 archie.py — La mascota flotant + eines de línia de comandes.
 
 Modes (primer argument):
-    (cap)            daemon: comprova cada 5 min i mostra la bombolla si cal
+    (cap)            daemon: comprova periòdicament i mostra la bombolla si cal
     demo             mostra una bombolla d'exemple que NO desapareix sola
     check            comprova ARA i mostra el resultat (o "tot OK") en una bombolla
     status           taula a la consola amb l'estat de tots els checks
-    fix              Aplica silenciosament TOTES les optimitzacions bàsiques de cop
+    brain            què ha mostrejat i après l'Archie de tu (transparència)
+    undo             desfà totes les automatitzacions actives ara mateix
+    reset [all]      esborra els snoozes (amb 'all', també aprenentatge i estat)
+    fix              aplica silenciosament TOTES les optimitzacions bàsiques de cop
     help             aquesta ajuda
 
 NOTA: shebang /usr/bin/python3 a propòsit. PyGObject (gi) viu a
@@ -27,6 +30,7 @@ import time
 from collections import defaultdict
 
 import monitor
+import brain
 
 # --------------------------------------------------------------------------- #
 #  Constants
@@ -35,7 +39,11 @@ APP_ID = "dev.archie.Archie"
 CHECK_INTERVAL = 60         # comprova cada minut (per a crítics)
 INITIAL_DELAY = 30          # espera després d'arrencar (no molestar al login)
 MIN_GAP = 15 * 60          # mínim entre suggeriments no crítics
-SNOOZE = 60 * 60           # "Ara no" → silencia aquest tema 1 h
+GRACE_AFTER_FIX = 6 * 3600 # en fer "Arregla-ho", calla aquest tema 6 h (encara
+                           # que el detect segueixi saltant: p. ex. cache que no
+                           # baixa del llindar) per no convertir-se en un nag.
+# El temps de silenci en fer "Ara no" ja no és fix: el calcula brain.snooze_for()
+# amb backoff exponencial (com més ignores un tema, més estona calla).
 
 DEFAULT_TIMEOUT = int(os.environ.get("ARCHIE_TIMEOUT", "20"))  # s visible (daemon)
 CHECK_MODE_TIMEOUT = 30     # s visible en mode 'check'
@@ -187,12 +195,12 @@ def run_fix_all_cli() -> int:
     failed_count = 0
 
     for chk, st in results:
-        if st == monitor.ALERT and chk.fix:
+        if st == monitor.ALERT and chk.run_command:
             if state.is_blocked(chk.id):
                 continue
 
             print(f" ⚙️  Arreglant: {c('1', chk.id)}", end="", flush=True)
-            ok = monitor.run_fix(chk.fix, silent=True)
+            ok = monitor.run_fix(chk.run_command, silent=True)
             
             if ok:
                 print(f"\r {c('32', '✓')} {c('1', chk.id)} " + c("90", "(aplicat amb èxit)"))
@@ -249,7 +257,7 @@ def run_status_cli() -> int:
             code, glyph = sym[st]
             line = f"   {c(code, glyph)} {chk.id}"
             if st == monitor.ALERT:
-                line += "  " + c("90", "→ ") + chk.message
+                line += "  " + c("90", "→ ") + chk.display_message
             elif st in note:
                 line += c("90", note[st])
             print(line)
@@ -265,6 +273,90 @@ def run_status_cli() -> int:
     print(" " + summary)
     if counts[monitor.ALERT]:
         print(c("90", " Consell: «archie check» ho mostra com a bombolla flotant.\n"))
+    return 0
+
+
+def run_brain_cli() -> int:
+    """Transparència: què ha mostrejat i après l'Archie de tu."""
+    color = sys.stdout.isatty()
+    def c(code: str, text: str) -> str:
+        return f"\033[{code}m{text}\033[0m" if color else text
+
+    info = brain.Brain(State()).insights()
+    print(c("1;38;5;183", "\n 🧠 Archie — què sé de tu"))
+
+    bat = info["battery"]
+    pct = f"{bat['pct']}%" if bat["pct"] is not None else "—"
+    estat = "🔋 amb bateria" if bat["on_battery"] else "🔌 endollat"
+    if bat.get("eta_min"):
+        estat += f" (~{bat['eta_min']} min)"
+    repos = "en repòs" if info["idle"] else "actiu"
+    loads = ", ".join(f"{l:.2f}" for l in info["loads"]) or "—"
+    print(c("90", f"   {estat} · bateria {pct} · {repos} · "
+                  f"{info['samples']} mostres · càrrega recent [{loads}]"))
+    if info.get("focus"):
+        print(c("33", "   🎬 Mode focus actiu: ara mateix només t'avisaria de coses crítiques."))
+    print()
+
+    ghosts = info["ghosts"]
+    print(" " + c("1", "👻 Accions actives ara mateix"))
+    if not ghosts:
+        print(c("90", "   (cap — no he canviat res del teu sistema)"))
+    for g in ghosts:
+        tag = c("36", "[après]") if g["learned"] else c("35", "[auto-desfà]" if g["auto_restore"] else "[manual]")
+        print(f"   • {tag} {g['msg']}")
+    print(c("90", "   Pots desfer-ho tot amb «archie undo».\n"))
+
+    habits = info["habits"]
+    print(" " + c("1", "📚 Hàbits apresos"))
+    if not habits:
+        print(c("90", "   (encara no he après res; t'aniré coneixent)"))
+    for h in habits:
+        a, d = h["accept"], h["dismiss"]
+        if h["auto_disabled"]:
+            mark = c("31", "ho faig sol: NO (ho vas desfer)")
+        elif h["auto"] and h["streak_accept"] >= 3:
+            mark = c("32", "ho faig sol ✓")
+        elif h["auto"]:
+            falten = max(0, 3 - h["streak_accept"])
+            mark = c("33", f"a {falten} accepts de fer-ho sol") if falten else c("32", "ho faig sol ✓")
+        else:
+            mark = c("90", "només suggeriment")
+        print(f"   • {c('1', h['id'])}  "
+              + c("32", f"✓{a}") + " " + c("31", f"✗{d}")
+              + (c("90", f"  (ignorat {h['streak_dismiss']}× seguits)") if h["streak_dismiss"] else "")
+              + f"  — {mark}")
+    print()
+    return 0
+
+
+def run_undo_cli() -> int:
+    done = brain.Brain(State()).undo_all()
+    if not done:
+        print("archie: no hi ha cap acció activa per desfer.")
+        return 0
+    for gid, msg in done:
+        print(f"  ↩  {gid}  {msg}")
+    print(f"\narchie: {len(done)} acció(ns) desfeta(es).")
+    return 0
+
+
+def run_reset_cli() -> int:
+    hard = len(sys.argv) > 2 and sys.argv[2].lower() in ("all", "--all", "hard", "tot")
+    st = State()
+    # Desfés primer qualsevol automatització activa, per no deixar el sistema tocat.
+    brain.Brain(st).undo_all()
+    st.data["snoozed"] = {}
+    if hard:
+        st.data["applied"] = {}
+        st.data["feedback"] = {}
+        st.data["history"] = []
+        st.data.pop("last_ghost_time", None)
+    st._save()
+    if hard:
+        print("archie: estat reiniciat DEL TOT (snoozes, optimitzacions i aprenentatge).")
+    else:
+        print("archie: snoozes esborrats (l'aprenentatge es manté). Usa «archie reset all» per esborrar-ho tot.")
     return 0
 
 
@@ -435,6 +527,9 @@ def run_gui(mode: str) -> int:
         def run_checks(self) -> None:
             if self.showing or self._sweeping:
                 return
+            # Purga entrades velles perquè el dict no creixi sense límit.
+            cutoff = time.time() - 7200
+            self._shown_times = {k: v for k, v in self._shown_times.items() if v > cutoff}
             recent_shown = (time.time() - self.state.last_shown < MIN_GAP)
             self._sweeping = True
             threading.Thread(
@@ -452,23 +547,78 @@ def run_gui(mode: str) -> int:
             ).start()
 
         def _sweep_worker(self, is_blocked, force, only_critical, done_cb) -> None:
-            # Afegim la capacitat d'ignorar el check que acaben de mostrar
-            # i que l'usuari ha ignorat, perquè pugui passar al següent en la llista
-            # sense bloquejar tota la cua d'alertes indefinidament.
+            b = brain.Brain(self.state)
+            # Mostreig de tendències (bateria, càrrega, RAM, processos) cada cicle.
+            b.sample()
+
+            # Mode focus: si estàs gravant/en reunió o a pantalla completa, només
+            # deixem passar el que és crític (sobreescalfament, OOM…).
+            if not force and not only_critical and b.in_focus_mode():
+                only_critical = True
+
+            # 1. Intel·ligència proactiva: accions fantasma reversibles i
+            #    auto-restauració quan canvia el context (només en mode daemon).
+            if not force and not only_critical:
+                event = b.tick()
+                if event is not None:
+                    check = monitor.Check(
+                        id=event["id"], category="ghost",
+                        message=event["message"], detect="",
+                        fix=event.get("undo"),
+                        label=event.get("undo_label", "Desfés"))
+                    check._is_ghost = True
+                    check._ghost_id = event["id"]
+                    check._ghost_restore = (event.get("kind") == "restore")
+                    GLib.idle_add(done_cb, check)
+                    return
+
+            # Ignora temporalment el que acabem de mostrar (1 h) perquè la cua
+            # avanci; els crítics no s'ignoren mai.
             def is_blocked_extended(sid: str) -> bool:
                 if is_blocked(sid):
                     return True
-                # Si l'acabem de mostrar recentment (1 hora), passa al següent.
-                # Excepcions: alertes crítiques (aquestes mai s'ignoren)
                 if not only_critical and (time.time() - self._shown_times.get(sid, 0) < 3600):
                     return True
                 return False
 
             try:
-                check = monitor.first_alert(is_blocked_extended, force=force, only_critical=only_critical)
+                check = monitor.first_alert(is_blocked_extended, force=force,
+                                            only_critical=only_critical)
             except Exception as e:
                 print(f"archie: error comprovant: {e}", file=sys.stderr)
                 check = None
+
+            # 2. Anomalies que només es veuen amb tendències (fuga de memòria,
+            #    drenatge ràpid). Tenen prioritat sobre els suggeriments normals,
+            #    però mai sobre una alerta crítica.
+            if not force and not only_critical and (check is None or not check.critical):
+                syn = b.leak_suspect() or b.drain_suspect()
+                if (syn is not None and not self.state.is_blocked(syn["id"])
+                        and time.time() - self._shown_times.get(syn["id"], 0) >= 3600):
+                    vc = monitor.Check(
+                        id=syn["id"], category=syn.get("category", "memory"),
+                        message=syn["message"], detect="",
+                        fix=syn.get("fix"), label=syn.get("label", "Arregla-ho"))
+                    GLib.idle_add(done_cb, vc)
+                    return
+
+            # 3. Automatització apresa: si sempre acceptes un fix segur i
+            #    reversible, l'Archie el fa sol i només t'ofereix desfer-ho.
+            if (check is not None and not force and not only_critical
+                    and b.should_autoapply(check)):
+                monitor.run_fix(check.run_command, silent=True)
+                b.mark_autoapplied(check)
+                vc = monitor.Check(
+                    id=check.id, category="ghost",
+                    message=f"🤖 {check.display_message}\n"
+                            "(Ho he fet jo sol perquè sempre ho acceptes. «Desfés» si no toca.)",
+                    detect="", fix=check.undo, label="Desfés")
+                vc._is_ghost = True
+                vc._ghost_id = check.id
+                vc._learned = True
+                GLib.idle_add(done_cb, vc)
+                return
+
             GLib.idle_add(done_cb, check)
 
         def _sweep_done(self, check) -> bool:
@@ -491,25 +641,35 @@ def run_gui(mode: str) -> int:
         def _present(self, check, record: bool) -> None:
             self.current = check
             self.showing = True
-            self.msg_label.set_text(check.message)
+            self.msg_label.set_text(check.display_message)
             if check.id not in ("all_ok", "demo"):
                 self._shown_times[check.id] = time.time()
+            
+            is_ghost = getattr(check, "_is_ghost", False)
             
             if check.fix:
                 self.fix_btn.set_label(check.label or "Arregla-ho")
                 self.fix_btn.set_visible(True)
-                self.later_btn.set_label("Ara no")
+                if is_ghost:
+                    self.later_btn.set_visible(False)
+                    # En mode ghost, "Arregla-ho" en realitat és "Desfés"
+                else:
+                    self.later_btn.set_visible(True)
+                    self.later_btn.set_label("Ara no")
             else:
                 self.fix_btn.set_visible(False)
+                self.later_btn.set_visible(True)
                 self.later_btn.set_label("Entesos")
 
-            if record and self.mode == "daemon":
+            if record and self.mode == "daemon" and not is_ghost:
                 self.state.mark_shown(check.id)
 
             self._autohide_secs = (
                 0 if self.mode == "demo"
                 else CHECK_MODE_TIMEOUT if self.mode == "check"
-                else DEFAULT_TIMEOUT
+                # Avisos de restauració (només informatius) curts; les accions
+                # amb "Desfés" duren el normal perquè hi puguis reaccionar.
+                else 5 if getattr(check, "_ghost_restore", False) else DEFAULT_TIMEOUT
             )
 
             self.bubble.set_opacity(0.0)
@@ -579,19 +739,34 @@ def run_gui(mode: str) -> int:
         def on_fix(self, _btn) -> None:
             self._cancel_autohide()
             c = self.current
-            if c is not None and self.mode != "demo" and c.fix:
-                ok = monitor.run_fix(c.fix)
-                if ok and c.once:
-                    self.state.mark_applied(c.id)
-                c._status = "unknown"  # Força reavaluació si torna a sortir
+            if c is not None and self.mode != "demo" and c.run_command:
+                is_ghost = getattr(c, "_is_ghost", False)
+                ok = monitor.run_fix(c.run_command, silent=is_ghost)
+                if is_ghost:
+                    # En ghost, "Arregla-ho" és en realitat "Desfés".
+                    bn = brain.Brain(self.state)
+                    if getattr(c, "_learned", False):
+                        bn.record_feedback(c.id, accepted=False)  # no ho automatitzis més
+                    bn.clear_ghost(getattr(c, "_ghost_id", c.id))
+                else:
+                    if ok and c.once:
+                        self.state.mark_applied(c.id)
+                    # Període de gràcia: ja hi has actuat, no insisteixis aviat
+                    # encara que el detect torni a saltar.
+                    self.state.snooze(c.id, GRACE_AFTER_FIX)
+                    brain.Brain(self.state).record_feedback(c.id, accepted=True)
+                c._status = "unknown"  # força reavaluació si torna a sortir
             self._hide()
 
         def on_later(self, _btn) -> None:
             self._cancel_autohide()
             c = self.current
-            if (c is not None and self.mode != "demo"
-                    and c.id not in ("all_ok", "demo")):
-                self.state.snooze(c.id, SNOOZE)
+            if c is not None and self.mode != "demo":
+                is_ghost = getattr(c, "_is_ghost", False)
+                if not is_ghost and c.id not in ("all_ok", "demo"):
+                    bn = brain.Brain(self.state)
+                    bn.record_feedback(c.id, accepted=False)
+                    self.state.snooze(c.id, bn.snooze_for(c.id))  # backoff adaptatiu
             self._hide()
 
         def _on_key(self, _ctrl, keyval, _code, _mods) -> bool:
@@ -653,16 +828,29 @@ def main() -> int:
             mode = "check"
         elif a == "fix":
             mode = "fix"
+        elif a in ("brain", "insights", "memoria", "mem"):
+            mode = "brain"
+        elif a in ("undo", "desfes", "restore"):
+            mode = "undo"
+        elif a == "reset":
+            mode = "reset"
         elif a in ("help", "h"):
             print(__doc__)
             return 0
         else:
-            print(f"archie: mode desconegut '{args[0]}'. Prova: status, fix, demo, check, help",
+            print(f"archie: mode desconegut '{args[0]}'. "
+                  "Prova: status, brain, undo, reset, fix, demo, check, help",
                   file=sys.stderr)
             return 2
 
     if mode == "status":
         return run_status_cli()
+    if mode == "brain":
+        return run_brain_cli()
+    if mode == "undo":
+        return run_undo_cli()
+    if mode == "reset":
+        return run_reset_cli()
     if mode == "fix":
         return run_fix_all_cli()
 
