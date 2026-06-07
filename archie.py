@@ -459,6 +459,7 @@ def run_config_cli() -> int:
                 except ValueError:
                     config[opt["key"]] = opt["choices"][-1]
             elif key in [10, 13]: # Enter
+                state._load() # Recarregar del disc abans de desar per no esborrar l'historial del dimoni
                 state.data["config"] = config
                 state._save()
                 return True
@@ -678,6 +679,7 @@ def run_gui(mode: str) -> int:
 
         # -- comprovació (daemon) ------------------------------------------ #
         def run_checks(self) -> None:
+            self.state._load() # Sincronitza l'estat per recollir canvis fets des de la CLI
             if self.showing or self._sweeping:
                 return
             # Purga entrades velles perquè el dict no creixi sense límit.
@@ -695,6 +697,7 @@ def run_gui(mode: str) -> int:
             ).start()
 
         def _run_once(self) -> None:
+            self.state._load()
             self._sweeping = True
             threading.Thread(
                 target=self._sweep_worker,
@@ -721,7 +724,8 @@ def run_gui(mode: str) -> int:
                         id=event["id"], category="ghost",
                         message=event["message"], detect="",
                         fix=event.get("undo"),
-                        label=event.get("undo_label", "Desfés"))
+                        label=event.get("undo_label", "Desfés"),
+                        label_en="")
                     check._is_ghost = True
                     check._ghost_id = event["id"]
                     check._ghost_restore = (event.get("kind") == "restore")
@@ -769,7 +773,9 @@ def run_gui(mode: str) -> int:
                 vc = monitor.Check(
                     id=check.id, category="ghost",
                     message=f"🤖 {check.display_message}{suffix}",
-                    detect="", fix=check.undo, label="Desfés" if lang != "en" else "Undo")
+                    detect="", fix=check.undo, 
+                    label="Desfés" if lang != "en" else "Undo",
+                    label_en="")
                 vc._is_ghost = True
                 vc._ghost_id = check.id
                 vc._learned = True
@@ -811,7 +817,8 @@ def run_gui(mode: str) -> int:
                 self.fix_btn.set_label(getattr(check, "display_label", check.label) or ("Fix it" if lang == "en" else "Arregla-ho"))
                 self.fix_btn.set_visible(True)
                 if is_ghost:
-                    self.later_btn.set_visible(False)
+                    self.later_btn.set_visible(True)
+                    self.later_btn.set_label("Okey!")
                 else:
                     self.later_btn.set_visible(True)
                     self.later_btn.set_label("Not now" if lang == "en" else "Ara no")
