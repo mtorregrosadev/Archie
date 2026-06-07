@@ -29,6 +29,7 @@ import os
 import shutil
 import subprocess
 import time
+import signal
 from dataclasses import dataclass
 from typing import Callable, List, Optional, Tuple
 
@@ -43,7 +44,10 @@ _libc = ctypes.CDLL(ctypes.util.find_library("c"))
 def _set_priority(pid: int, priority: int) -> bool:
     """Canvia la prioritat (nice) d'un procés via libc directament."""
     # setpriority(PRIO_PROCESS=0, who, priority)
-    return _libc.setpriority(0, pid, priority) == 0
+    try:
+        return _libc.setpriority(0, pid, priority) == 0
+    except Exception:
+        return False
 
 def _get_rss_kb(pid: int) -> int:
     """Llegeix la RAM resident (RSS) d'un procés directament de /proc."""
@@ -53,7 +57,9 @@ def _get_rss_kb(pid: int) -> int:
             parts = f.read().split()
             if len(parts) < 2: return 0
             pages = int(parts[1])
-            return pages * (os.sysconf('SC_PAGE_SIZE') // 1024)
+            # La mida de pàgina sol ser 4096 bytes (4KB), però ho consultem al sistema
+            page_size_kb = os.sysconf('SC_PAGE_SIZE') // 1024
+            return pages * page_size_kb
     except (OSError, IndexError, ValueError):
         return 0
 
@@ -498,20 +504,22 @@ class Brain:
                         cmd = f.read()
                         if "brave" in cmd and "--type=renderer" in cmd:
                             pid = int(d)
-                            _set_priority(pid, 19)
-                            pids.append(pid)
+                            if _set_priority(pid, 19):
+                                pids.append(pid)
                 except OSError: continue
         except OSError: pass
         
         if not pids: return None
 
-        # Guardem com desfer-ho
-        return ("python3 -c 'import os; [os.system(f\"renice -n 0 -p {p}\") for p in " + str(pids) + "]'",
+        # Robust undo: use the libc wrapper via python inline instead of renice
+        undo_cmd = f"python3 -c 'import ctypes, ctypes.util; libc = ctypes.CDLL(ctypes.util.find_library(\"c\")); [libc.setpriority(0, p, 0) for p in {pids}]'"
+
+        return (undo_cmd,
                 _T("👻 Autopilot: he baixat la prioritat de les pestanyes per estalviar bateria.",
                    "👻 Autopilot: lowered tab priority to save battery."))
 
     def _tab_restore_ok(self) -> bool:
-        # Restaurem si s'endolla O si l'ordinador deixa d'estar "idle"
+        # Restaurem si s'endolla O si l'ordinador deja d'estar "idle"
         return self._charging() or not self.is_idle()
 
     # ---- ghost: bluetooth ---------------------------------------------- #
@@ -691,31 +699,43 @@ class Brain:
         return False
 
     # ---- ghost: pausar sincronitzacions -------------------------------- #
-    def _pgrep(self, name: str) -> bool:
+    def _pgrep_pids(self, name: str) -> List[int]:
+        """Versió nativa de pgrep que retorna PIDs llegint de /proc."""
+        pids = []
         try:
             for d in os.listdir("/proc"):
                 if not d.isdigit(): continue
                 try:
                     with open(f"/proc/{d}/comm", "r") as f:
-                        if f.read().strip() == name: return True
+                        if f.read().strip() == name:
+                            pids.append(int(d))
                 except OSError: continue
         except OSError: pass
-        return False
+        return pids
 
     def _sync_want(self) -> bool:
         if not (self.on_battery() and (self.battery_pct() or 100) <= 30):
             return False
-        return any(self._pgrep(a) for a in _SYNC_APPS)
+        return any(bool(self._pgrep_pids(a)) for a in _SYNC_APPS)
 
     def _sync_do(self) -> Optional[Tuple[str, str]]:
         paused = []
+        all_pids = []
         for a in _SYNC_APPS:
-            # Per fer STOP seguim usant pkill per ara per estalviar codi, però ja no pulem
-            if self._pgrep(a) and _run(["pkill", "-STOP", "-x", a])[0] == 0:
+            pids = self._pgrep_pids(a)
+            if pids:
+                for p in pids:
+                    try:
+                        os.kill(p, signal.SIGSTOP)
+                        all_pids.append(p)
+                    except OSError: continue
                 paused.append(a)
         if not paused:
             return None
-        undo = "; ".join(f"pkill -CONT -x {a}" for a in paused)
+        
+        # Undo robust via os.kill en python inline
+        undo = f"python3 -c 'import os, signal; [os.kill(p, signal.SIGCONT) for p in {all_pids}]'"
+        
         return (undo, _T(f"👻 Sincronitzacions en pausa ({', '.join(paused)}): estalvi amb bateria baixa.",
                      f"👻 Syncs paused ({', '.join(paused)}): saving battery."))
 
