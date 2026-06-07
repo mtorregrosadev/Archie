@@ -551,11 +551,17 @@ def run_gui(mode: str) -> int:
 
         def _start_dbus(self) -> None:
             """Starts the D-Bus listener in a separate event loop."""
+            def on_dbus_event(event_type, data):
+                b = brain.Brain(self.state)
+                b.handle_dbus_event(event_type, data)
+                if event_type in ("power_status_change", "system_wake"):
+                    # Despertem el fil principal (GTK) perquè avaluï i mostri la bombolla si cal
+                    GLib.idle_add(self.run_checks)
+
             async def run_dbus():
                 import monitor
                 monitor.DBUS_ACTIVE = True
-                b = brain.Brain(self.state)
-                self.dbus = dbus_listener.DBusListener(b.handle_dbus_event)
+                self.dbus = dbus_listener.DBusListener(on_dbus_event)
                 await self.dbus.start()
             
             try:

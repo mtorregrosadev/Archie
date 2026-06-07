@@ -102,8 +102,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     listener = DBusListener(mock_brain_callback)
     
-    loop = asyncio.get_event_loop()
     try:
-        loop.run_until_complete(listener.start())
+        asyncio.run(listener.start())
     except KeyboardInterrupt:
-        loop.run_until_complete(listener.stop())
+        asyncio.run(listener.stop())

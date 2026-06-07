@@ -21,7 +21,7 @@ bold "==> Instal·lant Archie"
 # --------------------------------------------------------------------------- #
 if command -v pacman >/dev/null 2>&1; then
   bold "==> Dependències (pacman)"
-  required=(gtk4 gtk4-layer-shell python-gobject python-yaml)
+  required=(gtk4 gtk4-layer-shell python-gobject python-yaml python-dbus-next)
   missing=()
   for pkg in "${required[@]}"; do
     pacman -Qq "$pkg" >/dev/null 2>&1 || missing+=("$pkg")
@@ -69,6 +69,7 @@ mkdir -p "$INSTALL_DIR"
 install -m 0755 "$SRC_DIR/archie.py"          "$INSTALL_DIR/archie.py"
 install -m 0644 "$SRC_DIR/monitor.py"         "$INSTALL_DIR/monitor.py"
 install -m 0644 "$SRC_DIR/brain.py"           "$INSTALL_DIR/brain.py"
+install -m 0644 "$SRC_DIR/dbus_listener.py"   "$INSTALL_DIR/dbus_listener.py"
 install -m 0644 "$SRC_DIR/archie_checks.yaml" "$INSTALL_DIR/archie_checks.yaml"
 
 # Wrapper a ~/.local/bin perquè puguis fer: archie status | demo | check

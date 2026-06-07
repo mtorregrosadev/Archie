@@ -1,4 +1,3 @@
-DBUS_ACTIVE = False
 """
 monitor.py — Motor de checks d'Archie, dirigit per dades (archie_checks.yaml).
 
@@ -23,9 +22,11 @@ import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
-# PyYAML si hi és; si no, un mini-parser per al nostre subconjunt.
+import yaml
+
+DBUS_ACTIVE = False
 try:
     import yaml  # type: ignore
     _HAVE_YAML = True

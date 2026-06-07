@@ -157,8 +157,6 @@ class Brain:
         if event_type == "power_status_change":
             # Immediate sample on power change to react fast
             self.sample()
-            # If we transitioned to battery or back, trigger a tick immediately
-            self.tick()
         elif event_type == "system_sleep":
             self.state._save()
         elif event_type == "system_wake":
