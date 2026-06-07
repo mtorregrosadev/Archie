@@ -596,25 +596,19 @@ def run_gui(mode: str) -> int:
             self._shown_times = {}
             self.dbus = None
 
-        def _start_dbus(self) -> None:
-            """Starts the D-Bus listener in a separate event loop."""
+        def _setup_dbus(self) -> None:
+            """Starts the native Gio.DBus listener."""
             def on_dbus_event(event_type, data):
                 b = brain.Brain(self.state)
                 b.handle_dbus_event(event_type, data)
                 if event_type in ("power_status_change", "system_wake"):
-                    # Despertem el fil principal (GTK) perquè avaluï i mostri la bombolla si cal
-                    GLib.idle_add(self.run_checks)
+                    # Ja estem al fil principal, no cal idle_add
+                    self.run_checks()
 
-            async def run_dbus():
-                import monitor
-                monitor.DBUS_ACTIVE = True
-                self.dbus = dbus_listener.DBusListener(on_dbus_event)
-                await self.dbus.start()
-            
-            try:
-                asyncio.run(run_dbus())
-            except Exception as e:
-                print(f"archie: dbus error: {e}", file=sys.stderr)
+            import monitor
+            monitor.DBUS_ACTIVE = True
+            self.dbus = dbus_listener.DBusListener(on_dbus_event)
+            self.dbus.start()
 
         def _get_config(self, key: str, default_value: int) -> int:
             return self.state.data.get("config", {}).get(key, default_value)
@@ -626,7 +620,7 @@ def run_gui(mode: str) -> int:
                 # Animació del gat: parpelleig i estats
                 GLib.timeout_add(3000, self._animate_cat)
             if self.dbus is None:
-                threading.Thread(target=self._start_dbus, daemon=True).start()
+                self._setup_dbus()
             self.hold()
             if self.mode == "daemon":
                 if not self._scheduled:

@@ -63,7 +63,7 @@ checks:
     category: cpu
     message: "Bateria <40% en mode rendiment. Activo l'estalvi d'energia per no quedar-te tirat?"
     message_en: "Battery <40% in performance mode. Enable power saving to avoid running out?"
-    detect: "cat /sys/class/power_supply/BAT0/capacity | awk '{if ($1 < 40) exit 0; else exit 1}' && powerprofilesctl get | grep -q performance"
+    detect: "python:battery_capacity:40"
     fix: "powerprofilesctl set power-saver"
     undo: "powerprofilesctl set balanced"
     auto: true
@@ -76,9 +76,9 @@ checks:
   - id: oom_imminent
     category: memory
     critical: true
-    message: "Alerta! <500MB de RAM lliure. El PC es penjarà aviat. Tanco el procés que més memòria gasta ('{}')?"
-    message_en: "Alert! <500MB free RAM. The PC will freeze soon. Close the process using the most memory ('{}')?"
-    detect: "free -m | awk '/^Mem/ {if ($7 < 500) exit 0; else exit 1}' && { pid=$(archie_top_pid pmem); [ -n \"$pid\" ] && archie_proc_label \"$pid\"; }"
+    message: "Alerta! <500MB de RAM lliure. El PC es penjarà aviat. Tanco el procés que més memòria gasta?"
+    message_en: "Alert! <500MB free RAM. The PC will freeze soon. Close the process using the most memory?"
+    detect: "python:ram_free:500"
     fix: "pid=$(archie_top_pid pmem); [ -n \"$pid\" ] && kill -9 \"$pid\""
     label: "Allibera RAM"
     label_en: "Free RAM"
@@ -374,9 +374,9 @@ checks:
   - id: system_load_high
     category: performance
     critical: true
-    message: "Càrrega extrema del sistema! El procés '{}' està saturant els nuclis. Vols forçar el seu tancament ara mateix?"
-    message_en: "Extreme system load! The '{}' process is saturating the cores. Force close it right now?"
-    detect: "load=$(awk '{print $1}' /proc/loadavg); cores=$(nproc); awk -v l=$load -v c=$cores 'BEGIN{exit !(l > c*2)}' || exit 1; pid=$(archie_top_pid pcpu); [ -n \"$pid\" ] || exit 1; archie_proc_label \"$pid\""
+    message: "Càrrega extrema del sistema ({})! Vols forçar el tancament del procés que més consumeix?"
+    message_en: "Extreme system load ({})! Force close the top consuming process?"
+    detect: "python:loadavg"
     fix: "pid=$(archie_top_pid pcpu); [ -n \"$pid\" ] && kill -9 \"$pid\""
     label: "Tanca'l"
     label_en: "Close it"
