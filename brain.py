@@ -62,9 +62,10 @@ BATTERY_GLOB = "/sys/class/power_supply/BAT*"
 # Apps de sincronització que es poden pausar/reprendre sense perdre res.
 _SYNC_APPS = ["dropbox", "syncthing", "nextcloud", "megasync", "insync"]
 
-# Apps que indiquen que estàs en una reunió/gravant → no interrompre (mode focus).
+# Apps que indiquen que estàs en una reunió/gravant o treballant → no interrompre (mode focus).
 _FOCUS_APPS = ["obs", "zoom", ".zoom", "teams-for-linux", "skypeforlinux",
-               "wf-recorder", "wlrecord", "kooha", "blue-recorder"]
+               "wf-recorder", "wlrecord", "kooha", "blue-recorder",
+               "code", "vscodium", "sublime_text", "intellij", "android-studio"]
 
 
 # --------------------------------------------------------------------------- #
@@ -142,6 +143,9 @@ class Brain:
         self._ghosts: List[_Ghost] = [
             _Ghost("ghost_power_saver", self._ps_want, self._ps_do, self._charging,
                    restore_msg="🔌 Endollat: he restaurat el teu perfil d'energia.", restore_msg_en="🔌 Plugged in: restored your power profile."),
+            _Ghost("ghost_tab_priority", self._tab_want, self._tab_do, self._tab_restore_ok,
+                   undo_label="Restaura prioritat", undo_label_en="Restore priority",
+                   restore_msg="🚀 Prioritat de pestanyes restaurada.", restore_msg_en="🚀 Tab priority restored."),
             _Ghost("ghost_bluetooth", self._bt_want, self._bt_do, self._charging,
                    restore_msg="🔌 Endollat: he tornat a encendre el Bluetooth.", restore_msg_en="🔌 Plugged in: Bluetooth turned back on."),
             _Ghost("ghost_backlight", self._bl_want, self._bl_do, self._charging,
@@ -272,6 +276,13 @@ class Brain:
             fb["streak_accept"] = fb.get("streak_accept", 0) + 1
             fb["streak_dismiss"] = 0
         else:
+            # Si no hi ha fix possible, no ho comptem com a "ignorat" negativament
+            # (és només un avís informatiu).
+            import monitor
+            check = next((c for c in monitor.get_checks() if c.id == cid), None)
+            if check and not check.fix:
+                return
+
             fb["dismiss"] = fb.get("dismiss", 0) + 1
             fb["streak_dismiss"] = fb.get("streak_dismiss", 0) + 1
             fb["streak_accept"] = 0
@@ -403,6 +414,23 @@ class Brain:
             return None
         return (f"powerprofilesctl set {prof}",
                 _T("👻 Mode estalvi activat: bateria baixa i equip en repòs.", "👻 Power saving mode on: low battery and idle."))
+
+    # ---- ghost: prioritat de pestanyes Brave/Chrome --------------------- #
+    def _tab_want(self) -> bool:
+        # Si estem amb bateria i el PC entra en repòs, baixem la prioritat de les pestanyes.
+        return bool(self.on_battery() and self.is_idle() and shutil.which("renice")
+                    and _run(["pgrep", "-f", "brave.*--type=renderer"])[0] == 0)
+
+    def _tab_do(self) -> Optional[Tuple[str, str]]:
+        # Posem les pestanyes a la prioritat més baixa (19) per estalviar CPU de fons.
+        _run_shell("pgrep -f 'brave.*--type=renderer' | xargs -r renice -n 19")
+        return ("pgrep -f 'brave.*--type=renderer' | xargs -r renice -n 0",
+                _T("👻 Autopilot: he baixat la prioritat de les pestanyes per estalviar bateria.",
+                   "👻 Autopilot: lowered tab priority to save battery."))
+
+    def _tab_restore_ok(self) -> bool:
+        # Restaurem si s'endolla O si l'ordinador deixa d'estar "idle" (has tornat a moure el ratolí/teclat).
+        return self._charging() or not self.is_idle()
 
     # ---- ghost: bluetooth ---------------------------------------------- #
     def _bt_want(self) -> bool:
