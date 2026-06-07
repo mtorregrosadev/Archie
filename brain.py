@@ -152,6 +152,18 @@ class Brain:
                    restore_msg="🔌 Endollat: sincronitzacions represes.", restore_msg_en="🔌 Plugged in: syncs resumed."),
         ]
 
+    def handle_dbus_event(self, event_type: str, data: dict) -> None:
+        """Processes real-time D-Bus events from dbus_listener.py."""
+        if event_type == "power_status_change":
+            # Immediate sample on power change to react fast
+            self.sample()
+            # If we transitioned to battery or back, trigger a tick immediately
+            self.tick()
+        elif event_type == "system_sleep":
+            self.state._save()
+        elif event_type == "system_wake":
+            self.sample()
+
     # ===================================================================== #
     #  1. MOSTREIG
     # ===================================================================== #
