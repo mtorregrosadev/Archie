@@ -337,6 +337,33 @@ checks:
     detect: "dig @$(grep nameserver /etc/resolv.conf | head -1 | awk '{print $2}') google.com | grep 'Query time' | awk '{if ($4 > 100) exit 0; else exit 1}'"
     fix: "echo 'nameserver 1.1.1.1' | sudo tee /etc/resolv.conf"
 
+  - id: dns_broken_tailscale
+    category: network
+    message: "Estàs connectat però la xarxa no resol dominis (bloqueig de DNS). Tens Tailscale instal·lat; vols engegar-lo? Sovint soluciona aquests bloquejos màgicament."
+    message_en: "You are connected but the network doesn't resolve domains (DNS block). You have Tailscale installed; want to start it? It often magically bypasses these blocks."
+    detect: "ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1 && ! ping -c 1 -W 2 google.com >/dev/null 2>&1 && command -v tailscale >/dev/null 2>&1 && tailscale status 2>&1 | grep -q 'Stopped'"
+    fix: "sudo tailscale up"
+    label: "Activa Tailscale"
+    label_en: "Start Tailscale"
+
+  - id: dns_flush_caches
+    category: network
+    message: "La xarxa funciona però el DNS s'ha quedat penjat. Netejo la memòria cau de resolució i reinicio el servei?"
+    message_en: "Network works but DNS is hanging. Flush the resolution cache and restart the service?"
+    detect: "ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1 && ! ping -c 1 -W 2 google.com >/dev/null 2>&1 && command -v resolvectl >/dev/null 2>&1 && ! command -v tailscale >/dev/null 2>&1"
+    fix: "sudo resolvectl flush-caches && sudo systemctl restart systemd-resolved"
+    label: "Neteja DNS"
+    label_en: "Flush DNS"
+
+  - id: wifi_dead_reconnect
+    category: network
+    message: "El Wi-Fi està connectat però no tens sortida a internet. Reinicio la targeta de xarxa per veure si reacciona?"
+    message_en: "Wi-Fi is connected but you have no internet access. Restart the network card to see if it reacts?"
+    detect: "command -v nmcli >/dev/null 2>&1 && nmcli -t -f TYPE,STATE dev | grep -q 'wifi:connected' && ! ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1"
+    fix: "sudo nmcli radio wifi off && sleep 2 && sudo nmcli radio wifi on"
+    label: "Reinicia Wi-Fi"
+    label_en: "Restart Wi-Fi"
+
   # ═══════════════════════════════════════
   # 🖥️ RECURSOS EN TEMPS REAL
   # ═══════════════════════════════════════
