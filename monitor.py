@@ -22,9 +22,11 @@ import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
-# PyYAML si hi és; si no, un mini-parser per al nostre subconjunt.
+import yaml
+
+DBUS_ACTIVE = False
 try:
     import yaml  # type: ignore
     _HAVE_YAML = True
@@ -153,6 +155,8 @@ class Check:
     def _primary_tool(self) -> str:
         """El primer binari de la canonada de detecció (per saber si hi és)."""
         s = self.detect.strip()
+        if s.startswith("python:"):
+            return "" # Native checks always available
         while s and s[0] in "!({":
             s = s[1:].strip()
         first = s.split()[0] if s.split() else ""
@@ -170,12 +174,19 @@ class Check:
     def evaluate(self, force: bool = False) -> str:
         """Retorna ALERT / OK / SKIP / ERROR, fent servir la cache si toca."""
         if not force and self._status != "unknown":
-            if self.ttl > 0 and (time.time() - self._last_run) < self.ttl:
+            effective_ttl = self.ttl
+            if self.category == "battery" and DBUS_ACTIVE:
+                effective_ttl = max(effective_ttl, 3600)  # Poll once per hour if DBus is live
+            if (time.time() - self._last_run) < effective_ttl:
                 return self._status
 
         if not self.available():
             self._status, self._last_run = SKIP, time.time()
             return self._status
+
+        # V3: Suport per a deteccions natives en Python (extremadament ràpid)
+        if self.detect.startswith("python:"):
+            return self._evaluate_native()
 
         try:
             result = subprocess.run(
@@ -198,6 +209,55 @@ class Check:
             self._status = ERROR
         except Exception:
             self._status = ERROR
+        self._last_run = time.time()
+        return self._status
+
+    def _evaluate_native(self) -> str:
+        """Executa lògica de detecció nativa per evitar subprocessos."""
+        try:
+            # Format: "python:func_name:args"
+            parts = self.detect.split(":")
+            func_name = parts[1]
+            
+            if func_name == "loadavg":
+                with open("/proc/loadavg", "r") as f:
+                    load = float(f.read().split()[0])
+                nproc = os.cpu_count() or 1
+                if load > (nproc * 2):
+                    self._out = str(load)
+                    self._status = ALERT
+                else:
+                    self._status = OK
+            elif func_name == "battery_capacity":
+                # Busquem el directori de bateria
+                import glob
+                bat_dirs = glob.glob("/sys/class/power_supply/BAT*")
+                if not bat_dirs:
+                    self._status = SKIP
+                else:
+                    with open(f"{bat_dirs[0]}/capacity", "r") as f:
+                        cap = int(f.read().strip())
+                    if cap < int(parts[2]): # llindar passat per argument
+                        self._status = ALERT
+                    else:
+                        self._status = OK
+            elif func_name == "ram_free":
+                with open("/proc/meminfo", "r") as f:
+                    mem = f.readlines()
+                free = 0
+                for line in mem:
+                    if "MemAvailable" in line:
+                        free = int(line.split()[1]) // 1024 # MB
+                        break
+                if free < int(parts[2]):
+                    self._status = ALERT
+                else:
+                    self._status = OK
+            else:
+                self._status = ERROR
+        except:
+            self._status = ERROR
+            
         self._last_run = time.time()
         return self._status
 

@@ -7,12 +7,14 @@ and two buttons: **Fix it** and **Not now**.
 The rest of the time it is invisible. It never bothers you more than once every 15 minutes.
 
 ```
- /\_/\
-( o.o )   "Swappiness too high for SSD (>10). Reduce it to 10?"
- > ^ <      [ Fix it ]  [ Not now ]
+  /\_/\
+ ( o.o )   "Swappiness too high for SSD (>10). Reduce it to 10?"
+ / > < \     [ Fix it ]  [ Not now ]
 ```
 
-![Archie Example](assets/archie_example.png)
+<p align="center">
+  <img src="assets/archie_example.png" alt="Archie Example" style="border-radius: 28px;">
+</p>
 
 ## Commands
 
@@ -39,13 +41,19 @@ Below is an ASCII diagram showing how Archie's different parts interact:
                                  ^
                                  | (Sensors, CPU, RAM, processes)
   +------------------+           v             +------------------+
-  |    brain.py      | <--- (Metrics) -------> |    monitor.py    |
-  |  (Intelligence,  |                         | (Checks Engine)  |
-  |  Habits, Ghosts) |                         |  Reads the YAML  |
-  +------------------+                         +------------------+
-          ^                                            |
-          | (Feedback: Accept/Dismiss)                 | (Alerts)
-          v                                            v
+  | dbus_listener.py | <--- (Metrics) -------> |    monitor.py    |
+  |  (Real-time      |           |             | (Checks Engine)  |
+  |  Events/Wake)    |           |             |  Reads the YAML  |
+  +------------------+           |             +------------------+
+          |                      v                     |
+  (Hardware Signals)     +------------------+          |
+          |------------> |    brain.py      |          |
+                         |  (Intelligence,  |          |
+                         |  Habits, Ghosts) |          |
+                         +------------------+          |
+                                 ^                     |
+                                 | (Feedback)          | (Alerts)
+                                 v                     v
   +-------------------------------------------------------------+
   |                         archie.py                           |
   |                     (Application / CLI)                     |
@@ -60,16 +68,15 @@ Below is an ASCII diagram showing how Archie's different parts interact:
   +------------------+                         |  fix, config...) |
 ```
 
-## Behavior
+## Behavior and Triggers
 
-- **Daemon**: periodically checks. Shows at most **1 suggestion every 15 min**
-  (**critical** ones skip the wait and warn instantly).
-- **Duration**: the bubble stays for **20 s** (configurable with `ARCHIE_TIMEOUT`) and
-  **the timer pauses while hovering with the mouse** — so it doesn't leave
-  while you read. `Esc` or "Not now" closes it.
-- **Adaptive silence**: when clicking "Not now", the topic remains silent with **exponential backoff**
+Archie operates using a hybrid engine (Event-driven + Periodic Polling):
+
+1. **Real-time Triggers (D-Bus):** `dbus_listener.py` is constantly listening in the background at 0% CPU. When you **plug/unplug your laptop** or **wake it from sleep**, the D-Bus fires an event. Archie's `brain.py` reacts in milliseconds, immediately applying ghost optimizations (like dimming the screen or turning off Bluetooth) and popping up a bubble.
+2. **Periodic Polling (YAML):** For things that don't emit hardware events (like RAM filling up, CPU overheating, or a rogue background process), the `monitor.py` engine still relies on `archie_checks.yaml`. However, it now does this incredibly efficiently: if the D-Bus listener is active, Archie only polls the battery every 1 hour, trusting the hardware to wake it up if needed.
+3. **Adaptive silence**: when clicking "Not now", the topic remains silent with **exponential backoff**
   (1 h → 2 h → 4 h… up to 1 week). The more you ignore it, the less it bothers you.
-- **State** in `~/.local/state/archie/state.json`: last warning, silenced topics,
+4. **State** in `~/.local/state/archie/state.json`: last warning, silenced topics,
   applied optimizations (`once`), **metrics history**, **learning** and
   **active automations**.
 

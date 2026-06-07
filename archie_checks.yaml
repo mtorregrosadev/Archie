@@ -27,6 +27,7 @@ checks:
     message_en: "CPU >75°C when idle. You might need thermal paste or fan cleaning."
     detect: "sensors | grep 'Package id 0' | awk '{print $4}' | tr -d '+°C' | awk -F. '{if ($1 > 75) exit 0; else exit 1}'"
     fix: null
+    once: true
 
   # ═══════════════════════════════════════
   # ⚡ CPU & ENERGIA
@@ -62,10 +63,11 @@ checks:
     category: cpu
     message: "Bateria <40% en mode rendiment. Activo l'estalvi d'energia per no quedar-te tirat?"
     message_en: "Battery <40% in performance mode. Enable power saving to avoid running out?"
-    detect: "cat /sys/class/power_supply/BAT0/capacity | awk '{if ($1 < 40) exit 0; else exit 1}' && powerprofilesctl get | grep -q performance"
+    detect: "python:battery_capacity:40"
     fix: "powerprofilesctl set power-saver"
     undo: "powerprofilesctl set balanced"
     auto: true
+    once: true
 
   # ═══════════════════════════════════════
   # 🧠 MEMÒRIA RAM
@@ -74,9 +76,9 @@ checks:
   - id: oom_imminent
     category: memory
     critical: true
-    message: "Alerta! <500MB de RAM lliure. El PC es penjarà aviat. Tanco el procés que més memòria gasta ('{}')?"
-    message_en: "Alert! <500MB free RAM. The PC will freeze soon. Close the process using the most memory ('{}')?"
-    detect: "free -m | awk '/^Mem/ {if ($7 < 500) exit 0; else exit 1}' && { pid=$(archie_top_pid pmem); [ -n \"$pid\" ] && archie_proc_label \"$pid\"; }"
+    message: "Alerta! <500MB de RAM lliure. El PC es penjarà aviat. Tanco el procés que més memòria gasta?"
+    message_en: "Alert! <500MB free RAM. The PC will freeze soon. Close the process using the most memory?"
+    detect: "python:ram_free:500"
     fix: "pid=$(archie_top_pid pmem); [ -n \"$pid\" ] && kill -9 \"$pid\""
     label: "Allibera RAM"
     label_en: "Free RAM"
@@ -150,9 +152,9 @@ checks:
 
   - id: pacman_cache_large
     category: ssd
-    message: "La cache de pacman ocupa +3GB. La buido deixant només l'última versió de cada paquet?"
-    message_en: "Pacman cache takes +3GB. Empty it leaving only the latest version of each package?"
-    detect: "du -s /var/cache/pacman/pkg 2>/dev/null | awk '{if ($1 > 3000000) exit 0; else exit 1}'"
+    message: "La cache de pacman ocupa +5GB. La buido deixant només l'última versió de cada paquet?"
+    message_en: "Pacman cache takes +5GB. Empty it leaving only the latest version of each package?"
+    detect: "du -s /var/cache/pacman/pkg 2>/dev/null | awk '{if ($1 > 5000000) exit 0; else exit 1}'"
     fix: "if command -v paccache >/dev/null; then sudo paccache -rk1; else sudo pacman -Scc --noconfirm; fi"
 
   - id: journal_size_large
@@ -264,6 +266,7 @@ checks:
     message_en: "Battery health <60%. Time to consider replacing it to not lose usage hours."
     detect: "f=/sys/class/power_supply/BAT0; r=$f/charge_full; d=$f/charge_full_design; [ -r $r ] || { r=$f/energy_full; d=$f/energy_full_design; }; [ -r $r ] && awk -v a=$(cat $r) -v b=$(cat $d) 'BEGIN{exit !(b>0 && a/b < 0.6)}'"
     fix: null
+    once: true
 
   - id: wifi_power_save_off
     category: battery
@@ -334,8 +337,35 @@ checks:
     category: network
     message: "Peticions de xarxa lentes. Puc canviar el teu DNS a 1.1.1.1 per anar més ràpid?"
     message_en: "Slow network requests. Change your DNS to 1.1.1.1 to be faster?"
-    detect: "dig @$(grep nameserver /etc/resolv.conf | head -1 | awk '{print $2}') google.com | grep 'Query time' | awk '{if ($4 > 100) exit 0; else exit 1}'"
+    detect: "if command -v dig >/dev/null 2>&1; then dig @$(grep nameserver /etc/resolv.conf | head -1 | awk '{print $2}') google.com | grep 'Query time' | awk '{if ($4 > 100) exit 0; else exit 1}'; else ping -c 1 -w 2 google.com >/dev/null 2>&1 || exit 1; time=$(ping -c 3 google.com | tail -1 | awk -F'/' '{print $5}' | cut -d. -f1); [ -n \"$time\" ] && [ \"$time\" -gt 150 ]; fi"
     fix: "echo 'nameserver 1.1.1.1' | sudo tee /etc/resolv.conf"
+
+  - id: dns_broken_tailscale
+    category: network
+    message: "Estàs connectat però la xarxa no resol dominis (bloqueig de DNS). Tens Tailscale instal·lat; vols engegar-lo? Sovint soluciona aquests bloquejos màgicament."
+    message_en: "You are connected but the network doesn't resolve domains (DNS block). You have Tailscale installed; want to start it? It often magically bypasses these blocks."
+    detect: "ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1 && ! ping -c 1 -W 2 google.com >/dev/null 2>&1 && command -v tailscale >/dev/null 2>&1 && tailscale status 2>&1 | grep -q 'Stopped'"
+    fix: "sudo tailscale up"
+    label: "Activa Tailscale"
+    label_en: "Start Tailscale"
+
+  - id: dns_flush_caches
+    category: network
+    message: "La xarxa funciona però el DNS s'ha quedat penjat. Netejo la memòria cau de resolució i reinicio el servei?"
+    message_en: "Network works but DNS is hanging. Flush the resolution cache and restart the service?"
+    detect: "ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1 && ! ping -c 1 -W 2 google.com >/dev/null 2>&1 && command -v resolvectl >/dev/null 2>&1 && ! command -v tailscale >/dev/null 2>&1"
+    fix: "sudo resolvectl flush-caches && sudo systemctl restart systemd-resolved"
+    label: "Neteja DNS"
+    label_en: "Flush DNS"
+
+  - id: wifi_dead_reconnect
+    category: network
+    message: "El Wi-Fi està connectat però no tens sortida a internet. Reinicio la targeta de xarxa per veure si reacciona?"
+    message_en: "Wi-Fi is connected but you have no internet access. Restart the network card to see if it reacts?"
+    detect: "command -v nmcli >/dev/null 2>&1 && nmcli -t -f TYPE,STATE dev | grep -q 'wifi:connected' && ! ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1"
+    fix: "sudo nmcli radio wifi off && sleep 2 && sudo nmcli radio wifi on"
+    label: "Reinicia Wi-Fi"
+    label_en: "Restart Wi-Fi"
 
   # ═══════════════════════════════════════
   # 🖥️ RECURSOS EN TEMPS REAL
@@ -344,9 +374,9 @@ checks:
   - id: system_load_high
     category: performance
     critical: true
-    message: "Càrrega extrema del sistema! El procés '{}' està saturant els nuclis. Vols forçar el seu tancament ara mateix?"
-    message_en: "Extreme system load! The '{}' process is saturating the cores. Force close it right now?"
-    detect: "load=$(awk '{print $1}' /proc/loadavg); cores=$(nproc); awk -v l=$load -v c=$cores 'BEGIN{exit !(l > c*2)}' || exit 1; pid=$(archie_top_pid pcpu); [ -n \"$pid\" ] || exit 1; archie_proc_label \"$pid\""
+    message: "Càrrega extrema del sistema ({})! Vols forçar el tancament del procés que més consumeix?"
+    message_en: "Extreme system load ({})! Force close the top consuming process?"
+    detect: "python:loadavg"
     fix: "pid=$(archie_top_pid pcpu); [ -n \"$pid\" ] && kill -9 \"$pid\""
     label: "Tanca'l"
     label_en: "Close it"
@@ -364,17 +394,21 @@ checks:
     category: performance
     message: "Massa pestanyes de Brave obertes consumint de tot. Tanca les que no usis!"
     message_en: "Too many Brave tabs open consuming everything. Close the ones you don't use!"
-    detect: "[ $(ps aux | grep 'brave.*--type=renderer' | grep -v grep | wc -l) -gt 5 ]"
-    fix: null
+    detect: "[ $(ps aux | grep 'brave.*--type=renderer' | grep -v grep | wc -l) -gt 8 ]"
+    fix: "ps aux | grep 'brave.*--type=renderer' | grep -v grep | sort -nrk 3 | head -n 3 | awk '{print $2}' | xargs -r kill -9"
+    label: "Neteja pestanyes"
+    label_en: "Clean tabs"
 
   - id: high_cpu_process
     category: performance
-    message: "'{}' s'està menjant >50% de la CPU. El tanco a la força?"
-    message_en: "'{}' is eating >50% of CPU. Force close it?"
-    detect: "pid=$(archie_top_pid pcpu); [ -n \"$pid\" ] || exit 1; cpu=$(ps -p \"$pid\" -o %cpu= | tr -d ' '); awk -v c=$cpu 'BEGIN{exit !(c>50)}' || exit 1; archie_proc_label \"$pid\""
+    message: "'{}' s'està menjant >70% de la CPU. El tanco a la força?"
+    message_en: "'{}' is eating >70% of CPU. Force close it?"
+    detect: "pid=$(archie_top_pid pcpu); [ -n \"$pid\" ] || exit 1; cpu=$(ps -p \"$pid\" -o %cpu= | tr -d ' '); awk -v c=$cpu 'BEGIN{exit !(c>70)}' || exit 1; archie_proc_label \"$pid\""
     fix: "pid=$(archie_top_pid pcpu); [ -n \"$pid\" ] && kill -9 \"$pid\""
     label: "Tanca'l"
     label_en: "Close it"
+
+  - id: nmi_watchdog_on
 
   - id: nmi_watchdog_on
     category: performance
