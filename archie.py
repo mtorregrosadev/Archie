@@ -31,6 +31,8 @@ from collections import defaultdict
 
 import monitor
 import brain
+import dbus_listener
+import asyncio
 
 # --------------------------------------------------------------------------- #
 #  Constants
@@ -484,7 +486,7 @@ def run_config_cli() -> int:
 
 
 # --------------------------------------------------------------------------- #
-#  gtk4-layer-shell s'ha de carregar ABANS que libwayland quan s'usa via GI.
+#  gtk4-layer-shell s'ha de carregar ABANS que libwayland quand s'usa via GI.
 # --------------------------------------------------------------------------- #
 def _ensure_layer_shell_preloaded() -> None:
     if os.environ.get("ARCHIE_NO_PRELOAD") == "1":
@@ -545,6 +547,21 @@ def run_gui(mode: str) -> int:
             self._autohide_secs = 0
             self._scheduled = False
             self._shown_times = {}
+            self.dbus = None
+
+        def _start_dbus(self) -> None:
+            """Starts the D-Bus listener in a separate event loop."""
+            async def run_dbus():
+                import monitor
+                monitor.DBUS_ACTIVE = True
+                b = brain.Brain(self.state)
+                self.dbus = dbus_listener.DBusListener(b.handle_dbus_event)
+                await self.dbus.start()
+            
+            try:
+                asyncio.run(run_dbus())
+            except Exception as e:
+                print(f"archie: dbus error: {e}", file=sys.stderr)
 
         def _get_config(self, key: str, default_value: int) -> int:
             return self.state.data.get("config", {}).get(key, default_value)
@@ -553,6 +570,8 @@ def run_gui(mode: str) -> int:
         def do_activate(self) -> None:
             if self.win is None:
                 self._build_ui()
+            if self.dbus is None:
+                threading.Thread(target=self._start_dbus, daemon=True).start()
             self.hold()
             if self.mode == "daemon":
                 if not self._scheduled:
@@ -688,7 +707,7 @@ def run_gui(mode: str) -> int:
                 only_critical = True
 
             # 1. Intel·ligència proactiva: accions fantasma reversibles i
-            #    auto-restauració quan canvia el context (només en mode daemon).
+            #    auto-restauració quand canvia el context (només en mode daemon).
             if not force and not only_critical:
                 event = b.tick()
                 if event is not None:
