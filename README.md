@@ -7,12 +7,14 @@ and two buttons: **Fix it** and **Not now**.
 The rest of the time it is invisible. It never bothers you more than once every 15 minutes.
 
 ```
- /\_/\
-( o.o )   "Swappiness too high for SSD (>10). Reduce it to 10?"
- > ^ <      [ Fix it ]  [ Not now ]
+  /\_/\
+ ( o.o )   "Swappiness too high for SSD (>10). Reduce it to 10?"
+ / > < \     [ Fix it ]  [ Not now ]
 ```
 
-![Archie Example](assets/archie_example.png)
+<p align="center">
+  <img src="assets/archie_example.png" alt="Archie Example" style="border-radius: 28px;">
+</p>
 
 ## Commands
 

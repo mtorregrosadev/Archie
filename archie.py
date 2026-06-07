@@ -52,9 +52,31 @@ CHECK_MODE_TIMEOUT = 30     # s visible en mode 'check'
 FADE_IN_MS = 260
 FADE_OUT_MS = 180
 
-CAT = r""" /\_/\
-( o.o )
- > ^ <"""
+# --------------------------------------------------------------------------- #
+#  Expressions de l'Archie (Gat animat - Simètric i Cuqui)
+# --------------------------------------------------------------------------- #
+CAT_NORMAL = r"""  /\_/\
+ ( o.o )
+ / > < \ """
+
+CAT_BLINK = r"""  /\_/\
+ ( -.- )
+ / > < \ """
+
+CAT_HAPPY = r"""  /\_/\
+ ( ^.^ )
+ / > < \ """
+
+CAT_SURPRISED = r"""  /\_/\
+ ( O.O )
+ / > < \ """
+
+CAT_SLEEP = r"""  /\_/\
+ ( z.z )
+ / > < \ """
+
+CAT = CAT_NORMAL  # Per defecte
+
 
 CSS = b"""
 window { background: transparent; }
@@ -62,7 +84,7 @@ window { background: transparent; }
 .bubble {
   background-color: #1e2030;
   border: 1px solid #363a4f;
-  border-radius: 16px;
+  border-radius: 28px;
   padding: 14px 18px;
   margin: 6px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
@@ -71,8 +93,27 @@ window { background: transparent; }
 .cat {
   color: #c6a0f6;
   font-family: monospace;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: bold;
+  margin-right: 10px;
+  animation: float 3s ease-in-out infinite;
+}
+
+@keyframes float {
+  0% { transform: translateY(0px); }
+  50% { transform: translateY(-4px); }
+  100% { transform: translateY(0px); }
+}
+
+.shake {
+  animation: shake 0.5s cubic-bezier(.36,.07,.19,.97) both;
+}
+
+@keyframes shake {
+  10%, 90% { transform: translate3d(-1px, 0, 0); }
+  20%, 80% { transform: translate3d(2px, 0, 0); }
+  30%, 50%, 70% { transform: translate3d(-4px, 0, 0); }
+  40%, 60% { transform: translate3d(4px, 0, 0); }
 }
 
 .msg { color: #cad3f5; font-size: 13px; }
@@ -91,6 +132,11 @@ button.fix { background-color: #a6da95; color: #1e2030; font-weight: bold; }
 button.fix:hover { background-color: #b6e6a6; }
 button.later { background-color: #494d64; color: #cad3f5; }
 button.later:hover { background-color: #5b6078; }
+
+button:disabled {
+  opacity: 0.5;
+  filter: grayscale(100%);
+}
 """
 
 
@@ -577,6 +623,8 @@ def run_gui(mode: str) -> int:
         def do_activate(self) -> None:
             if self.win is None:
                 self._build_ui()
+                # Animació del gat: parpelleig i estats
+                GLib.timeout_add(3000, self._animate_cat)
             if self.dbus is None:
                 threading.Thread(target=self._start_dbus, daemon=True).start()
             self.hold()
@@ -598,6 +646,31 @@ def run_gui(mode: str) -> int:
             self.run_checks()
             GLib.timeout_add_seconds(self._get_config("check_interval", CHECK_INTERVAL), self._periodic_check)
             return GLib.SOURCE_REMOVE
+
+        def _animate_cat(self) -> bool:
+            if not self.win:
+                return GLib.SOURCE_REMOVE
+            
+            # Si no hi ha res actiu o és informatiu, el gat està relaxat
+            import random
+            
+            current_label = self.cat_label.get_label()
+            
+            # Si està pampalluguejant, obre els ulls
+            if current_label == CAT_BLINK:
+                self.cat_label.set_label(CAT_NORMAL)
+                return True
+            
+            # Si hi ha alerta crítica, ulls grans
+            if self.current and getattr(self.current, "critical", False):
+                self.cat_label.set_label(CAT_SURPRISED)
+                return True
+
+            # Parpelleig aleatori (només si està normal)
+            if current_label == CAT_NORMAL and random.random() < 0.3:
+                self.cat_label.set_label(CAT_BLINK)
+            
+            return True
 
         # -- UI ------------------------------------------------------------ #
         def _build_ui(self) -> None:
@@ -631,10 +704,10 @@ def run_gui(mode: str) -> int:
             self.bubble = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
             self.bubble.add_css_class("bubble")
 
-            cat = Gtk.Label(label=CAT)
-            cat.add_css_class("cat")
-            cat.set_valign(Gtk.Align.CENTER)
-            self.bubble.append(cat)
+            self.cat_label = Gtk.Label(label=CAT_NORMAL)
+            self.cat_label.add_css_class("cat")
+            self.cat_label.set_valign(Gtk.Align.CENTER)
+            self.bubble.append(self.cat_label)
 
             right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
             right.set_valign(Gtk.Align.CENTER)
@@ -807,6 +880,18 @@ def run_gui(mode: str) -> int:
             self.current = check
             self.showing = True
             self.msg_label.set_text(check.display_message)
+            self.fix_btn.set_sensitive(True)
+            self.later_btn.set_sensitive(True)
+            
+            # El gat reacciona a la nova alerta
+            if getattr(check, "critical", False):
+                self.cat_label.set_label(CAT_SURPRISED)
+                self.bubble.add_css_class("shake")
+                # Treiem la classe després d'un segon per poder-la repetir
+                GLib.timeout_add(1000, lambda: self.bubble.remove_css_class("shake") or False)
+            else:
+                self.cat_label.set_label(CAT_NORMAL)
+
             if check.id not in ("all_ok", "demo"):
                 self._shown_times[check.id] = time.time()
             
@@ -905,28 +990,41 @@ def run_gui(mode: str) -> int:
 
         # -- botons -------------------------------------------------------- #
         def on_fix(self, _btn) -> None:
+            if not self.fix_btn.get_sensitive():
+                return
             self._cancel_autohide()
             c = self.current
-            if c is not None and self.mode != "demo" and c.run_command:
+            if c is None:
+                self._hide()
+                return
+
+            if self.mode != "demo" and c.run_command:
                 is_ghost = getattr(c, "_is_ghost", False)
                 ok = monitor.run_fix(c.run_command, silent=is_ghost)
                 if is_ghost:
-                    # En ghost, "Arregla-ho" és en realitat "Desfés".
                     bn = brain.Brain(self.state)
                     if getattr(c, "_learned", False):
-                        bn.record_feedback(c.id, accepted=False)  # no ho automatitzis més
+                        bn.record_feedback(c.id, accepted=False)
                     bn.clear_ghost(getattr(c, "_ghost_id", c.id))
                 else:
                     if ok and c.once:
                         self.state.mark_applied(c.id)
-                    # Període de gràcia: ja hi has actuat, no insisteixis aviat
-                    # encara que el detect torni a saltar.
                     self.state.snooze(c.id, GRACE_AFTER_FIX)
                     brain.Brain(self.state).record_feedback(c.id, accepted=True)
-                c._status = "unknown"  # força reavaluació si torna a sortir
-            self._hide()
+            
+            # Gat feliç (funciona tant en mode real com en demo!)
+            self.cat_label.set_label(CAT_HAPPY)
+            self.fix_btn.set_sensitive(False)
+            self.later_btn.set_sensitive(False)
+            if hasattr(c, "_status"):
+                c._status = "unknown"
+            
+            # Esperem 3 segons perquè vegis el gat feliç
+            GLib.timeout_add_seconds(3, lambda: self._hide() or False)
 
         def on_later(self, _btn) -> None:
+            if not self.later_btn.get_sensitive():
+                return
             self._cancel_autohide()
             c = self.current
             if c is not None and self.mode != "demo":
