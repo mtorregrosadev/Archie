@@ -1,3 +1,4 @@
+DBUS_ACTIVE = False
 """
 monitor.py — Motor de checks d'Archie, dirigit per dades (archie_checks.yaml).
 
@@ -170,7 +171,10 @@ class Check:
     def evaluate(self, force: bool = False) -> str:
         """Retorna ALERT / OK / SKIP / ERROR, fent servir la cache si toca."""
         if not force and self._status != "unknown":
-            if self.ttl > 0 and (time.time() - self._last_run) < self.ttl:
+            effective_ttl = self.ttl
+            if self.category == "battery" and DBUS_ACTIVE:
+                effective_ttl = max(effective_ttl, 3600)  # Poll once per hour if DBus is live
+            if (time.time() - self._last_run) < effective_ttl:
                 return self._status
 
         if not self.available():
